@@ -1,5 +1,5 @@
 # Shell_MDO_ROM (ShMORe?)
-Reduced-Order Modeling for shell analysis with PENGoLINS for MDO applications
+### Reduced-Order Modeling for shell analysis with PENGoLINS for MDO applications
 
 This repository requires [PENGoLINS](https://github.com/hanzhao2020/PENGoLINS) and its dependencies.
 
