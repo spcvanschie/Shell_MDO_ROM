@@ -1,0 +1,8 @@
+# ignore IGS files
+*.igs
+
+# ignore the spline_data and result folders (created at runtime)
+/spline_data
+/results
+
+
