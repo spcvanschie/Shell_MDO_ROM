@@ -12,21 +12,6 @@ from tIGAr.BSplines import *
 from PENGoLINS.occ_utils import *
 from LinearTransformations import *
 import matplotlib.pyplot as plt
-import os
-import argparse
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--file_path', dest='file_path', default='Documents/Repositories/Shell_MDO_ROM/results/',
-                    help="File path for saved results.")
-
-args = parser.parse_args()
-
-### Arguments
-#file_path = args.file_path
-file_path = os.path.abspath(args.file_path)
-print("File path: {}".format(str(file_path)))
-
-
 
 SAVE_PATH = "./"
 
@@ -235,8 +220,8 @@ E = Constant(71.7e9)  # Young's modulus, Pa
 nu = Constant(0.33)  # Poisson's ratio
 rho = Constant(2.81e3)  # Material density, kg/m^3
 
-n_load = Constant(3.8)  # Load factor
-h_th = Constant(5.0e-3)  # Thickness of surfaces, m
+n_load = Constant(2.5)  # Load factor
+h_th = Constant(20.0e-3)  # Thickness of surfaces, m
 
 p = 3  # spline order
 penalty_coefficient = 1.0e3
@@ -256,9 +241,9 @@ num_surfs = len(wing_surfaces)
 if mpirank == 0:
     print("Number of surfaces:", num_surfs)
 
-num_pts_eval = [8]*num_surfs
-u_insert_list = [4]*num_surfs
-v_insert_list = [4]*num_surfs
+num_pts_eval = [16]*num_surfs
+u_insert_list = [8]*num_surfs
+v_insert_list = [8]*num_surfs
 ref_level_list = [1]*num_surfs
 for i in [4,5]:
     if ref_level_list[i] > 4:
@@ -300,7 +285,7 @@ if mpirank == 0:
 Geometry = GeometryWithLinearTransformations(preprocessor)
 splines = Geometry.baseline_surfs
 
-h_th_list = 4*[h_th/2]+(num_surfs-4)*[h_th]
+h_th_list = 4*[h_th]+(num_surfs-4)*[h_th]
 
 # Starting point of optimization loop
 
@@ -318,15 +303,18 @@ problem.mortar_meshes_setup(preprocessor.mapping_list,
                             penalty_coefficient)
 
 # Compute magnitude of weight load
-wing_weight = 0
+Body_weight = 1500
+wing_volume = 0
 for i in range(num_surfs):
-    wing_weight += assemble(h_th_list[i]*rho*splines[i].dx)
+    wing_volume += assemble(h_th_list[i]*splines[i].dx)
+
+wing_weight = wing_volume*rho
 
 if mpirank == 0:
-    print("Wing weight: {} kg".format(wing_weight))
+    print("Wing mass: {} kg".format(wing_weight))
 
 # Weight is a constant volumetric load in negative z-direction
-f1 = as_vector([Constant(0.0), Constant(0.0), -rho*n_load*Constant(9.81)])
+f1 = as_vector([Constant(0.0), Constant(0.0), n_load*Constant(9.81)*(Body_weight + wing_weight)/wing_volume])
 
 # Distributed downward load
 loads = [f1]*num_surfs
@@ -343,6 +331,16 @@ if mpirank == 0:
     print("Solving linear non-matching problem...")
 
 problem.solve_linear_nonmatching_problem()
+
+# mat_A = problem.A
+# Ai, Aj, Av = mat_A.getValuesCSR()
+# mat_A_dense = mat_A.convert("dense")
+# result = mat_A_dense.getDenseArray()
+# # mat_sparsity = np.zeros_like(mat_A)
+# # mat_sparsity[A != 0.] = 1.
+# fig, ax = plt.subplots()
+# ax.spy(result)
+# plt.show()
 
 # print out vertical displacement at the tip of trailing edge
 right_srf_ind = 3
