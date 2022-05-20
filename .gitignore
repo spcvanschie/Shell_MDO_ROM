@@ -3,9 +3,11 @@
 *.eps
 *.png
 *.jpg
+*.txt
 
 # ignore the spline_data and result folders (created at runtime)
 /spline_data
+/load_spline_data
 /results
 /__pycache__
 
