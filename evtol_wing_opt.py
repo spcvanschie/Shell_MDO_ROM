@@ -76,155 +76,119 @@ class ShellGroup(om.Group):
         # define optimization inputs
         inputs_comp = om.IndepVarComp()
         inputs_comp.add_output('h_th', shape=(self.shell_sim.num_surfs,),
-                              val=np.ones(self.shell_sim.num_surfs)*0.005)
+                              val=np.ones(self.shell_sim.num_surfs)*0.01)
         self.add_subsystem('inputs_comp', inputs_comp)
 
         # define solution state computation class (wraps both FOM and ROM)
-        state_comp = StateComp(spline_sim=self.spline_sim)
+        state_comp = StateComp(shell_sim=self.shell_sim)
         self.add_subsystem('state_comp', state_comp)
 
         # define objective function computation class
-        # NOTE: Initial implementation is functional (no errors)
-        objective_comp = ObjectiveComp(spline_sim=self.spline_sim)
+        objective_comp = ObjectiveComp(shell_sim=self.shell_sim)
         self.add_subsystem('objective_comp', objective_comp)
 
         # define constraint computation class
-        # NOTE: Initial implementation is functional (no errors)
-        constraints_comp = ConstraintsComp(spline_sim=self.spline_sim)
+        constraints_comp = ConstraintsComp(shell_sim=self.shell_sim)
         self.add_subsystem('constraints_comp', constraints_comp)
 
-
-
-        self.connect('inputs_comp.h_th', 'states_comp.h_th')
+        self.connect('inputs_comp.h_th', 'state_comp.h_th')
         self.connect('inputs_comp.h_th', 'constraints_comp.h_th')
         self.connect('inputs_comp.h_th', 'objective_comp.h_th')
-        self.connect('states_comp.displacements', 
+        self.connect('state_comp.displacements', 
                      'constraints_comp.displacements')
 
         # define design variables (shell thicknesses)
-        self.add_design_var('inputs_comp.h_th', lower=1e-3, upper=5e-2)
+        self.add_design_var('inputs_comp.h_th', lower=2e-3, upper=5e-2)
         
         # define objective function (weight of wing structure)
         self.add_objective('objective_comp.weight')
 
         # constraints: max tip displacement and max von Mises stress
         self.add_constraint('constraints_comp.tip_disp', upper=0.1)
-        self.add_constraint('constraints_comp.max_von_Mises_stress', lower=-70e9, upper=70e9)
+        self.add_constraint('constraints_comp.max_von_Mises_stress', upper=4.6e8)
 
 
-save_disp = True
-save_stress = True
 
-# Define parameters
-# Material properties of Al-7075 T6 (common aerospace alloy)
-E = Constant(71.7e9)  # Young's modulus, Pa
-nu = Constant(0.33)  # Poisson's ratio
-rho = Constant(2.81e3)  # Material density, kg/m^3
-n_load = Constant(2.5)  # Load factor
-h_th = Constant(20.0e-3)  # Thickness of surfaces, m
+if __name__ == "__main__":
+    save_disp = True
+    save_stress = True
 
-p = 3  # spline order
-filename_igs = "eVTOL_wing_structure.igs"
+    # Define parameters
+    # Material properties of Al-7075 T6 (common aerospace alloy)
+    E = Constant(71.7e9)  # Young's modulus, Pa
+    nu = Constant(0.33)  # Poisson's ratio
+    rho = Constant(2.81e3)  # Material density, kg/m^3
+    n_load = Constant(2.5)  # Load factor
 
-shell_sim = ShellSim(p, E, nu, rho, n_load, 
-                 filename_igs, comm=worldcomm)
+    p = 3  # spline order
+    filename_igs = "eVTOL_wing_structure.igs"
 
-h_th_list = 4*[h_th]+(num_surfs-4)*[h_th]
+    shell_sim = ShellSim(p, E, nu, rho, n_load, 
+                    filename_igs, comm=worldcomm)
 
-# Starting point of optimization loop
+    # h_th_list = 4*[h_th]+(shell_sim.num_surfs-4)*[h_th]
 
-# Create non-matching problem
-problem = NonMatchingCoupling(splines, E, h_th_list, nu, comm=worldcomm)
-problem.create_mortar_meshes(preprocessor.mortar_nels)
-problem.create_mortar_funcs('CG',1)
-problem.create_mortar_funcs_derivative('CG',1)
+    model = ShellGroup(shell_sim=shell_sim)
+    prob = om.Problem(model=model)
 
-if mpirank == 0:
-    print("Setting up mortar meshes...")
 
-problem.mortar_meshes_setup(preprocessor.mapping_list, 
-                            preprocessor.intersections_para_coords, 
-                            penalty_coefficient)
+    # SLSQP optimizer
+    prob.driver = om.ScipyOptimizeDriver()
+    prob.driver.options['optimizer'] = 'SLSQP'
+    prob.driver.options['tol'] = 1e-9
+    prob.driver.options['disp'] = True
+    # prob.driver.options['debug_print'] = ['objs']
+    prob.driver.options['maxiter'] = 3
 
-# Compute magnitude of weight load
-Body_weight = 1500
-wing_volume = 0
-for i in range(num_surfs):
-    wing_volume += assemble(h_th_list[i]*splines[i].dx)
+    prob.setup()
+    prob.run_driver()
+    if mpirank == 0:
+        print("Optimized thickness")
+        print(prob['inputs_comp.h_th'],'\n')
+        print(prob['objective_comp.weight'],'\n')
+        
+    # o_comp = ObjectiveComp(shell_sim=shell_sim)
+    # o_comp.setup()
+    # o_comp.compute()
 
-wing_weight = wing_volume*rho
+    # mat_A = problem.A
+    # Ai, Aj, Av = mat_A.getValuesCSR()
+    # mat_A_dense = mat_A.convert("dense")
+    # result = mat_A_dense.getDenseArray()
+    # # mat_sparsity = np.zeros_like(mat_A)
+    # # mat_sparsity[A != 0.] = 1.
+    # fig, ax = plt.subplots()
+    # ax.spy(result)
+    # plt.show()
 
-if mpirank == 0:
-    print("Wing mass: {} kg".format(wing_weight))
 
-# Weight is a constant volumetric load in negative z-direction
-f1 = as_vector([Constant(0.0), Constant(0.0), n_load*Constant(9.81)*(Body_weight + wing_weight)/wing_volume])
+    # Compute von Mises stress
+    if mpirank == 0:
+        print("Computing von Mises stresses...")
 
-# Distributed downward load
-loads = [f1]*num_surfs
-source_terms = []
-residuals = []
-for i in range(num_surfs):
-    source_terms += [inner(loads[i], problem.splines[i].rationalize(
-        problem.spline_test_funcs[i]))*h_th_list[i]*problem.splines[i].dx]
-    residuals += [SVK_residual(problem.splines[i], problem.spline_funcs[i], 
-        problem.spline_test_funcs[i], E, nu, h_th_list[i], source_terms[i])]
-problem.set_residuals(residuals)
+    von_Mises_tops = []
+    for i in range(shell_sim.problem.num_surfs):
+        spline_stress = ShellStressSVK(shell_sim.problem.splines[i], 
+                                    shell_sim.problem.spline_funcs[i],
+                                    shell_sim.E, shell_sim.nu, shell_sim.h_th[i], linearize=True,) 
+                                    # G_det_min=5e-2)
+        # von Mises stresses on top surfaces
+        von_Mises_top = spline_stress.vonMisesStress(shell_sim.h_th[i]/2)
+        von_Mises_top_proj = shell_sim.problem.splines[i].projectScalarOntoLinears(
+                            von_Mises_top, lumpMass=True)
+        von_Mises_tops += [von_Mises_top_proj]
 
-if mpirank == 0:
-    print("Solving linear non-matching problem...")
+    if mpirank == 0:
+        print("Saving results...")
 
-problem.solve_linear_nonmatching_problem()
-
-# mat_A = problem.A
-# Ai, Aj, Av = mat_A.getValuesCSR()
-# mat_A_dense = mat_A.convert("dense")
-# result = mat_A_dense.getDenseArray()
-# # mat_sparsity = np.zeros_like(mat_A)
-# # mat_sparsity[A != 0.] = 1.
-# fig, ax = plt.subplots()
-# ax.spy(result)
-# plt.show()
-
-# print out vertical displacement at the tip of trailing edge
-right_srf_ind = 3
-xi = array([1, 1])
-z_disp_hom = eval_func(problem.splines[right_srf_ind].mesh, 
-                       problem.spline_funcs[right_srf_ind][2], xi)
-w = eval_func(problem.splines[right_srf_ind].mesh, 
-              problem.splines[right_srf_ind].cpFuncs[3], xi)
-QoI = z_disp_hom/w
-
-if mpirank == 0:
-    print("Trailing edge tip vertical displacement: {:10.8f}.\n".format(QoI))
-
-# Compute von Mises stress
-if mpirank == 0:
-    print("Computing von Mises stresses...")
-
-von_Mises_tops = []
-for i in range(problem.num_splines):
-    spline_stress = ShellStressSVK(problem.splines[i], 
-                                   problem.spline_funcs[i],
-                                   E, nu, h_th_list[i], linearize=True,) 
-                                   # G_det_min=5e-2)
-    # von Mises stresses on top surfaces
-    von_Mises_top = spline_stress.vonMisesStress(h_th_list[i]/2)
-    von_Mises_top_proj = problem.splines[i].projectScalarOntoLinears(
-                         von_Mises_top, lumpMass=True)
-    von_Mises_tops += [von_Mises_top_proj]
-
-if mpirank == 0:
-    print("Saving results...")
-
-if save_disp:
-    for i in range(problem.num_splines):
-        save_results(splines[i], problem.spline_funcs[i], i, 
-                     save_path=SAVE_PATH, folder="results/", 
-                     save_cpfuncs=True, comm=worldcomm)
-if save_stress:
-    for i in range(problem.num_splines):
-        von_Mises_tops[i].rename("von_Mises_top_"+str(i), 
-                                 "von_Mises_top_"+str(i))
-        File(SAVE_PATH+"results/von_Mises_top_"+str(i)+".pvd") \
-            << von_Mises_tops[i]
+    if save_disp:
+        for i in range(shell_sim.problem.num_surfs):
+            save_results(shell_sim.splines[i], shell_sim.problem.spline_funcs[i], i, 
+                        save_path=SAVE_PATH, folder="results/", 
+                        save_cpfuncs=True, comm=worldcomm)
+    if save_stress:
+        for i in range(shell_sim.problem.num_surfs):
+            von_Mises_tops[i].rename("von_Mises_top_"+str(i), 
+                                    "von_Mises_top_"+str(i))
+            File(SAVE_PATH+"results/von_Mises_top_"+str(i)+".pvd") \
+                << von_Mises_tops[i]

@@ -15,6 +15,8 @@ class ObjectiveComp(om.ExplicitComponent):
         self.options.declare('shell_sim')
     
     def setup(self):
+        self.print_info = True
+
         self.shell_sim = self.options['shell_sim']
         self.add_input('h_th', shape=(self.shell_sim.num_surfs,), 
                        val=np.ones(self.shell_sim.num_surfs)*0.01)
@@ -25,6 +27,11 @@ class ObjectiveComp(om.ExplicitComponent):
     def compute(self, inputs, outputs):
         shell_volumes = self.compute_shell_volumes(inputs['h_th'])
         outputs['weight']= np.sum(shell_volumes)*self.shell_sim.rho
+
+        if self.print_info:
+            if MPI.rank(self.shell_sim.comm) == 0:
+                print("--- Evaluating design weight ...")
+                print("Weight: {}".format(outputs['weight']))
 
     def compute_shell_volumes(self, h_th):
         shell_volumes = [0.]*self.shell_sim.num_surfs

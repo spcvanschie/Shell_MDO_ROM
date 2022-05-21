@@ -67,12 +67,14 @@ class StateComp(om.ImplicitComponent):
         if self.print_info:
             if MPI.rank(self.shell_sim.comm) == 0:
                 print("--- Running solve_nonlinear ...")
+                print("h_th: {}".format(inputs['h_th']))
 
         self.shell_sim.update_h_th(inputs['h_th'])
         self.shell_sim.update_displacements(outputs['displacements'])
         self.shell_sim.update_external_loads()
         self.shell_sim.update_SVK_residuals()
         
+
         self.shell_sim.problem.set_residuals(self.shell_sim.residuals)
 
         _, u_iga = self.shell_sim.problem.\

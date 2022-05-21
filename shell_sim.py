@@ -173,8 +173,8 @@ class ShellSim:
         if self.print_info:
             if MPI.rank(self.comm) == 0:
                 print("--- Computing dRdu ...")
-        residuals = self.SVK_residuals()
-        self.problem.set_residuals(residuals)
+        self.update_SVK_residuals()
+        self.problem.set_residuals(self.residuals)
         dRtdut_FE, Rt_FE = self.problem.assemble_nonmatching()
         dRtdut_IGA, _ = self.problem.extract_nonmatching_system(
                         Rt_FE, dRtdut_FE)
@@ -191,15 +191,17 @@ class ShellSim:
         if self.print_info:
             if MPI.rank(self.comm) == 0:
                 print("--- Computing dRdt ...")
+        self.update_SVK_residuals()
         residuals = self.residuals
         self.dRtdh_ths_list = []
-        for i in range(self.num_splines):
+        for i in range(self.num_surfs):
             self.dRtdh_ths_list += [[],]
-            for j in range(self.num_splines):
+            for j in range(self.num_surfs):
                 # TODO: Figure out whether the couplings (i != j) 
                 # are sensitive w.r.t. thickness
                 if i == j:
-                    dRdh_th = derivative(residuals[i], self.h_th[i])
+                    h_th_temp = variable(self.h_th[i])
+                    dRdh_th = diff(residuals[i], h_th_temp)
                     dRdh_th_mat_FE = m2p(assemble(dRdh_th))
                     dRdh_th_mat_IGA = m2p(self.splines[i].M).\
                                       transposeMatMult(dRdh_th_mat_FE)
