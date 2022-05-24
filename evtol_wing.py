@@ -207,9 +207,6 @@ class GeometryWithLinearTransformations():
         """
         return self.create_geometry(trans_mats=trans_mats, rot_origin=self.rot_origin)
 
-#MAIN LOOP
-#for iter in range(10):
-
 save_disp = True
 save_stress = True
 # Define parameters
@@ -224,9 +221,11 @@ rho = Constant(2.81e3)  # Material density, kg/m^3
 
 n_load = Constant(2.5)  # Load factor
 
-h_th_min = Constant(2e-3) #lower bound on shell thickness
-h_th_max = Constant(5e-2) #upper bound on shell thickness
-#h_th = Constant(20.0e-3)  # Thickness of surfaces, m
+h_th_min = 2e-3 #lower bound on shell thickness
+h_th_max = 5e-2 #upper bound on shell thickness
+h_th = Constant(np.random.uniform(h_th_min,h_th_max))  # Thickness of surfaces, m
+
+print("Selected shell thickness: {} m".format(h_th))
 
 p = 3  # spline order
 penalty_coefficient = 1.0e3
@@ -290,9 +289,10 @@ if mpirank == 0:
 Geometry = GeometryWithLinearTransformations(preprocessor)
 splines = Geometry.baseline_surfs
 
+#generate list of thickness between max and min values
 h_th_list = []
 for i in range(num_surfs):
-    h_th_list.append(np.random.uniform(h_th_min,h_th_max))
+    h_th_list.append(Constant(np.random.uniform(h_th_min,h_th_max)))
 
 #h_th_list = num_surfs*[h_th]
 
@@ -341,12 +341,12 @@ if mpirank == 0:
 
 problem.solve_linear_nonmatching_problem()
 
-iter = 2
+iter = 6
 #save snapshots
 filename = './Shell_MDO_ROM/snapshots/disp_' + str(iter) + '.npy'
 np.save(filename,problem.u.getArray())
-filename = './Shell_MDO_ROM/snapshots/h_th_list_' + str(iter) + '.npy'
-np.save(filename,h_th_list)
+#filename = './Shell_MDO_ROM/snapshots/h_th_list_' + str(iter) + '.npy'
+#np.save(filename,h_th_list)
 # filename = './Shell_MDO_ROM/snapshots/A_' + str(1) + '.npy'
 # np.save(filename,problem.A.getArray())
 # filename = './Shell_MDO_ROM/snapshots/b_' + str(1) + '.npy'
@@ -376,10 +376,10 @@ w = eval_func(problem.splines[right_srf_ind].mesh,
 QoI = z_disp_hom/w
 
 
-'''
 if mpirank == 0:
     print("Trailing edge tip vertical displacement: {:10.8f}.\n".format(QoI))
 
+'''
 # Compute von Mises stress
 if mpirank == 0:
     print("Computing von Mises stresses...")
