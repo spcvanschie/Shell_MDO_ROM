@@ -162,12 +162,11 @@ class StateComp(om.ImplicitComponent):
                     #     dt_petsc = array2petsc_vec(d_inputs['t'])
 
                     # TODO: Update, h_th is not a PETSc vector
-                    dt_petsc = self.shell_sim.h_th_nest.copy()
-                    update_nest_vec(d_inputs['h_th'], dt_petsc)
-                    A_x_b(self.dresdt, dt_petsc, dres_petsc)
+                    dt = self.shell_sim.h_th
+                    dresdt_np = sp.sparse.csr_matrix((self.dresdt.getValuesCSR()[2], self.dresdt.getValuesCSR()[1], self.dresdt.getValuesCSR()[0])).toarray()
+                    dres = dresdt_np@dt
                     # dres = A_x(self.dresdt, dt_petsc)
-                    d_residuals['displacements'] += get_petsc_vec_array(
-                        dres_petsc, self.shell_sim.comm)
+                    d_residuals['displacements'] += dres
 
         elif mode == 'rev':
             if 'displacements' in d_residuals:
@@ -188,12 +187,17 @@ class StateComp(om.ImplicitComponent):
                     d_outputs['displacements'] += get_petsc_vec_array(
                         du_petsc, self.shell_sim.comm)
                 if 'h_th' in d_inputs:
-                    dt_petsc = self.shell_sim.h_th_nest.copy()
-                    # dt.zeroEntries()
-                    AT_x_b(self.dresdt, dres_petsc, dt_petsc)
-                    # dt = AT_x(self.dresdt, dres_petsc)
-                    d_inputs['h_th'] += get_petsc_vec_array(
-                                     dt_petsc, self.shell_sim.comm)
+                    # dt_petsc = self.shell_sim.h_th_nest.copy()
+                    # # dt.zeroEntries()
+                    # AT_x_b(self.dresdt, dres_petsc, dt_petsc)
+                    # # dt = AT_x(self.dresdt, dres_petsc)
+                    # d_inputs['h_th'] += get_petsc_vec_array(
+                    #                  dt_petsc, self.shell_sim.comm)
+                    
+                    dt = self.shell_sim.h_th
+                    dresdt_np = sp.sparse.csr_matrix((self.dresdt.getValuesCSR()[2], self.dresdt.getValuesCSR()[1], self.dresdt.getValuesCSR()[0])).toarray()
+                    dres = dresdt_np.T@(dres_petsc.array)
+                    d_inputs['h_th'] += dres
 
         if self.print_info:
             if MPI.rank(self.shell_sim.comm) == 0:

@@ -159,8 +159,8 @@ if __name__ == "__main__":
     # prob.driver.options['optimizer'] = 'COBYLA'
     # prob.driver.options['tol'] = 1e-9
     # prob.driver.options['disp'] = True
-    # prob.driver.opt_settings['rhobeg'] = 0.002
-    # prob.driver.opt_settings['catol'] = 1e-6
+    # prob.driver.opt_settings['rhobeg'] = 0.008
+    # prob.driver.opt_settings['catol'] = 0.
     # # prob.driver.options['debug_print'] = ['objs']
     # prob.driver.options['maxiter'] = 25
 
