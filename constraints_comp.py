@@ -31,8 +31,11 @@ class ConstraintsComp(om.ExplicitComponent):
         self.add_input('displacements', shape=self.shell_sim.iga_dof)
         self.add_input('h_th', shape=(self.shell_sim.num_surfs,), 
                        val=np.ones(self.shell_sim.num_surfs)*0.01)
+
         self.add_output('tip_disp', shape=1)
-        # self.add_output('max_von_Mises_stress', shape=1)
+        self.add_output('max_von_Mises_stress', shape=1)
+        self.add_output('h_th_range', shape=(self.shell_sim.num_surfs,))
+
         self.declare_partials('tip_disp', 'h_th')
         self.declare_partials('tip_disp', 'displacements', val=self.dGdu)
         # set nonzero positive gradients to stabilize the optimizer; compute the actual gradients later
@@ -52,7 +55,8 @@ class ConstraintsComp(om.ExplicitComponent):
         outputs['tip_disp'] = self.compute_tip_disp(inputs)
         # output the Von Mises stress normalized with the max Von Mises stress to bring it to O(1) for numerical accuracy purposes
         max_vm_stress, _, _ = self.compute_von_mises_stress(inputs)
-        # outputs['max_von_Mises_stress']= max_vm_stress/self.max_stress
+        outputs['max_von_Mises_stress']= max_vm_stress/self.max_stress
+        outputs['h_th_range'] = inputs['h_th']
 
         if self.print_info:
             if MPI.rank(self.shell_sim.comm) == 0:

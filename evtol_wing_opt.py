@@ -106,10 +106,8 @@ class ShellGroup(om.Group):
 
         # constraints: max tip displacement and max von Mises stress
         self.add_constraint('constraints_comp.tip_disp', upper=0.1)
-
-        # NOTE: Temporarily deactivated the maximum Von Mises stress bound
-        # self.add_constraint('constraints_comp.max_von_Mises_stress', upper=1.)
-
+        self.add_constraint('constraints_comp.max_von_Mises_stress', upper=1.)
+        self.add_constraint('h_th_range', lower=2e-3, upper=5e-2)
 
 
 if __name__ == "__main__":
@@ -147,22 +145,21 @@ if __name__ == "__main__":
 
 
     # SLSQP optimizer
-    prob.driver = om.ScipyOptimizeDriver()
-    prob.driver.options['optimizer'] = 'SLSQP'
-    prob.driver.options['tol'] = 1e-9
-    prob.driver.options['disp'] = True
-    prob.driver.options['maxiter'] = 10
+    # prob.driver = om.ScipyOptimizeDriver()
+    # prob.driver.options['optimizer'] = 'SLSQP'
+    # prob.driver.options['tol'] = 1e-9
+    # prob.driver.options['disp'] = True
+    # prob.driver.options['maxiter'] = 10
 
 
     # COBYLA optimizer (gradient-free)
-    # prob.driver = om.ScipyOptimizeDriver()
-    # prob.driver.options['optimizer'] = 'COBYLA'
-    # prob.driver.options['tol'] = 1e-9
-    # prob.driver.options['disp'] = True
-    # prob.driver.opt_settings['rhobeg'] = 0.008
-    # prob.driver.opt_settings['catol'] = 0.
-    # # prob.driver.options['debug_print'] = ['objs']
-    # prob.driver.options['maxiter'] = 25
+    prob.driver = om.ScipyOptimizeDriver()
+    prob.driver.options['optimizer'] = 'COBYLA'
+    prob.driver.options['tol'] = 1e-9
+    prob.driver.options['disp'] = True
+    prob.driver.opt_settings['rhobeg'] = 0.008
+    prob.driver.opt_settings['catol'] = 1e-10
+    prob.driver.options['maxiter'] = 25
 
 
     prob.setup()
