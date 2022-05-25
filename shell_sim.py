@@ -118,7 +118,7 @@ class ShellSim:
 
     def update_h_th(self, h_th):
         # convert numpy vector h_th to a list of Constant() objects for internal use
-        h_th_list = [Constant(h) for h in h_th]
+        h_th_list = [variable(Constant(h)) for h in h_th]
         self.h_th = h_th_list
         self.problem.h_th = h_th_list
 
@@ -200,11 +200,13 @@ class ShellSim:
                 # TODO: Figure out whether the couplings (i != j) 
                 # are sensitive w.r.t. thickness
                 if i == j:
-                    h_th_temp = variable(self.h_th[i])
-                    dRdh_th = diff(residuals[i], h_th_temp)
-                    dRdh_th_mat_FE = m2p(assemble(dRdh_th))
-                    dRdh_th_mat_IGA = m2p(self.splines[i].M).\
-                                      transposeMatMult(dRdh_th_mat_FE)
+                    # h_th_temp = variable(self.h_th[i])
+                    dRdh_th = diff(residuals[i], self.h_th[i])
+                    dRdh_th_mat_FE = v2p(assemble(dRdh_th))
+                    dRdh_th_mat_IGA = AT_x(m2p(self.splines[i].M), dRdh_th_mat_FE)
+                    # the result of this is a petsc4py vector. 
+                    # We convert it to a sparse matrix:
+                    dRdh_th_mat_IGA = petsc_vec_to_aijmat(dRdh_th_mat_IGA)
                 else:
                     dRdh_th_mat_IGA = None
                 # if self.problem.A_list[i][j] is not None:
@@ -236,9 +238,63 @@ class ShellSim:
         
         self.residuals = residuals
     
-    @staticmethod
-    def concatenate_list_into_vec(array_list):
-        return np.concatenate(array_list)
+    def solve_Ax_b(self, A, b, array=False):
+        x = b.copy()
+        x.zeroEntries()
+
+        solve_nonmatching_mat(A, x, b, solver='direct')
+        x.assemble()
+
+        # res = b.copy()
+        # A.mult(x, res)
+        # err = res - b
+        # print("**** relative error after solve: {}"
+        #       .format(err.norm()/b.norm()))
+
+        if array:
+            return get_petsc_vec_array(x, self.comm)
+        else:
+            return x
+
+    def solve_ATx_b(self, A, b, array=False):
+        AT = A.transpose()
+        x = b.copy()
+        x.zeroEntries()
+
+        # if mpirank == 0:
+        #     print("**** Solving ATx=b ...")
+
+        # ksp_type=PETSc.KSP.Type.GMRES
+        # # pc_type=PETSc.PC.Type.FIELDSPLIT
+        # pc_type=PETSc.PC.Type.LU
+        # fieldsplit_ksp_type=PETSc.KSP.Type.PREONLY
+        # fieldsplit_pc_type=PETSc.PC.Type.LU
+        # solve_nonmatching_mat(AT, x, b, solver='ksp', 
+        #                       ksp_type=ksp_type, pc_type=pc_type, 
+        #                       fieldsplit_ksp_type=fieldsplit_ksp_type,
+        #                       fieldsplit_pc_type=fieldsplit_pc_type,
+        #                       rtol=1e-15, max_it=int(1e6))
+
+        solve_nonmatching_mat(AT, x, b, solver='direct')
+        x.assemble()
+
+        # print("MPI rank: {}, b norm: {}".format(MPI.rank(self.comm),
+        #                                   b.norm()))
+        # print("MPI rank: {}, AT norm: {}".format(MPI.rank(self.comm),
+        #                                   AT.norm()))
+        # print("MPI rank: {}, x norm: {}".format(MPI.rank(self.comm),
+        #                                   x.norm()))
+
+        # res = b.copy()
+        # AT.mult(x, res)
+        # err = res - b
+        # print("**** relative error after solve: {}"
+        #       .format(err.norm()/b.norm()))
+        
+        if array:
+            return get_petsc_vec_array(x, self.comm)
+        else:
+            return x
 
 
 
@@ -321,3 +377,7 @@ if __name__ == '__main__':
 
     shell_sim = ShellSim(p, E, nu, rho, n_load, 
                     filename_igs, comm=worldcomm)
+    
+    # test derivative computations
+    dresdu = shell_sim.dRdu()
+    dresdt = shell_sim.dRdt()

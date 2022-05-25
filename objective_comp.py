@@ -21,10 +21,11 @@ class ObjectiveComp(om.ExplicitComponent):
         self.add_input('h_th', shape=(self.shell_sim.num_surfs,), 
                        val=np.ones(self.shell_sim.num_surfs)*0.01)
         self.add_output('weight', shape=1)
-        self.declare_partials('weight', 'h_th', dependent=False, 
-                              val=self.shell_sim.rho*self.compute_shell_volumes(np.ones(self.shell_sim.num_surfs)))
+        self.declare_partials('weight', 'h_th')
        
     def compute(self, inputs, outputs):
+        self.shell_sim.update_h_th(inputs['h_th'])
+
         shell_volumes = self.compute_shell_volumes(inputs['h_th'])
         outputs['weight']= np.sum(shell_volumes)*self.shell_sim.rho
 
@@ -39,6 +40,11 @@ class ObjectiveComp(om.ExplicitComponent):
             shell_volumes[i] = assemble(h_th[i]*self.shell_sim.splines[i].dx)
 
         return np.array(shell_volumes)
+
+    def compute_partials(self, inputs, partials):
+        self.shell_sim.update_h_th(inputs['h_th'])
+
+        partials['weight', 'h_th'] = self.shell_sim.rho*np.divide(self.compute_shell_volumes(self.shell_sim.h_th), inputs['h_th'])
 
 
 if __name__ == '__main__':

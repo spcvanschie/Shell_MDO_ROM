@@ -24,6 +24,10 @@ class StateComp(om.ImplicitComponent):
                                val=np.ones(self.shell_sim.num_surfs)*0.01)
         self.add_output('displacements', shape=self.shell_sim.iga_dof)
 
+        # self.declare_partials('displacements', 'h_th')
+        self.declare_partials('displacements', 'h_th')
+        self.declare_partials('displacements', 'displacements')
+
 
     def apply_nonlinear(self, inputs, outputs, residuals):
         """
@@ -77,9 +81,13 @@ class StateComp(om.ImplicitComponent):
 
         self.shell_sim.problem.set_residuals(self.shell_sim.residuals)
 
+        # this derivative computation is just here for debugging purposes
+        self.shell_sim.dRdt()
+
         _, u_iga = self.shell_sim.problem.\
                    solve_nonlinear_nonmatching_problem(
-                   max_it=30, zero_mortar_funcs=True, iga_dofs=True)
+                   max_it=30, zero_mortar_funcs=True, iga_dofs=True, 
+                   rtol=1e-3)
 
         outputs['displacements'] = get_petsc_vec_array(u_iga, 
                                    self.shell_sim.comm)
@@ -89,9 +97,9 @@ class StateComp(om.ImplicitComponent):
                 print("--- Finished solve_nonlinear ...")
 
 
-    def linearize(self, inputs, outputs, partials):
+    def linearize(self, inputs, outputs, jacobian):
         """
-        Compute derivatives of residual w.r.t. intpus and outputs.
+        Compute derivatives of jacobian (residual) w.r.t. inputs and outputs
         """
         if self.print_info:
             if MPI.rank(self.shell_sim.comm) == 0:
@@ -105,6 +113,9 @@ class StateComp(om.ImplicitComponent):
         # Compute derivatives in PETSc matrix format
         self.dresdu = self.shell_sim.dRdu()
         self.dresdt = self.shell_sim.dRdt()
+
+        jacobian['displacements', 'h_th'] = sp.sparse.csr_matrix((self.dresdt.getValuesCSR()[2], self.dresdt.getValuesCSR()[1], self.dresdt.getValuesCSR()[0]))
+        jacobian['displacements', 'displacements'] = sp.sparse.csr_matrix((self.dresdu.getValuesCSR()[2], self.dresdu.getValuesCSR()[1], self.dresdu.getValuesCSR()[0]))
 
         if self.print_info:
             if MPI.rank(self.shell_sim.comm) == 0:
@@ -150,6 +161,7 @@ class StateComp(om.ImplicitComponent):
                     # else:
                     #     dt_petsc = array2petsc_vec(d_inputs['t'])
 
+                    # TODO: Update, h_th is not a PETSc vector
                     dt_petsc = self.shell_sim.h_th_nest.copy()
                     update_nest_vec(d_inputs['h_th'], dt_petsc)
                     A_x_b(self.dresdt, dt_petsc, dres_petsc)
@@ -175,12 +187,12 @@ class StateComp(om.ImplicitComponent):
                     AT_x_b(self.dresdu, dres_petsc, du_petsc)
                     d_outputs['displacements'] += get_petsc_vec_array(
                         du_petsc, self.shell_sim.comm)
-                if 't' in d_inputs:
+                if 'h_th' in d_inputs:
                     dt_petsc = self.shell_sim.h_th_nest.copy()
                     # dt.zeroEntries()
                     AT_x_b(self.dresdt, dres_petsc, dt_petsc)
                     # dt = AT_x(self.dresdt, dres_petsc)
-                    d_inputs['t'] += get_petsc_vec_array(
+                    d_inputs['h_th'] += get_petsc_vec_array(
                                      dt_petsc, self.shell_sim.comm)
 
         if self.print_info:

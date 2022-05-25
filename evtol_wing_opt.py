@@ -67,11 +67,12 @@ def plot_controlpoints(surfs, surfs_mod):
 class ShellGroup(om.Group):
     def initialize(self):
         self.options.declare('shell_sim')
-        self.options.declare('tip_disp', default=.1)
-        self.options.declare('max_vonmises_stress', default=80e7)
+        # self.options.declare('tip_disp')
+        self.options.declare('max_vonmises_stress', default=4.6e8)
 
     def setup(self):
         self.shell_sim = self.options['shell_sim']
+        self.max_vonmises_stress = self.options['max_vonmises_stress']
 
         # define optimization inputs
         inputs_comp = om.IndepVarComp()
@@ -88,7 +89,7 @@ class ShellGroup(om.Group):
         self.add_subsystem('objective_comp', objective_comp)
 
         # define constraint computation class
-        constraints_comp = ConstraintsComp(shell_sim=self.shell_sim)
+        constraints_comp = ConstraintsComp(shell_sim=self.shell_sim, max_vonmises_stress=self.max_vonmises_stress)
         self.add_subsystem('constraints_comp', constraints_comp)
 
         self.connect('inputs_comp.h_th', 'state_comp.h_th')
@@ -105,7 +106,9 @@ class ShellGroup(om.Group):
 
         # constraints: max tip displacement and max von Mises stress
         self.add_constraint('constraints_comp.tip_disp', upper=0.1)
-        self.add_constraint('constraints_comp.max_von_Mises_stress', upper=4.6e8)
+
+        # NOTE: Temporarily deactivated the maximum Von Mises stress bound
+        # self.add_constraint('constraints_comp.max_von_Mises_stress', upper=1.)
 
 
 
@@ -119,6 +122,7 @@ if __name__ == "__main__":
     nu = Constant(0.33)  # Poisson's ratio
     rho = Constant(2.81e3)  # Material density, kg/m^3
     n_load = Constant(2.5)  # Load factor
+    Von_Mises_max = Constant(4.6e8)
 
     p = 3  # spline order
     filename_igs = "eVTOL_wing_structure.igs"
@@ -128,8 +132,18 @@ if __name__ == "__main__":
 
     # h_th_list = 4*[h_th]+(shell_sim.num_surfs-4)*[h_th]
 
-    model = ShellGroup(shell_sim=shell_sim)
+    model = ShellGroup(shell_sim=shell_sim, max_vonmises_stress=Von_Mises_max)
     prob = om.Problem(model=model)
+
+    # SNOPT optimizer
+    # prob.driver = om.pyOptSparseDriver()
+    # prob.driver.options['optimizer'] = 'SNOPT'
+    # prob.driver.opt_settings['Major feasibility tolerance'] = 1e-9
+    # prob.driver.opt_settings['Major optimality tolerance'] = 1e-9
+    # prob.driver.options['disp'] = True
+    # prob.driver.options['maxiter'] = 10
+    # prob.driver.options['debug_print'] = ['objs']
+    # prob.driver.options['print_results'] = True
 
 
     # SLSQP optimizer
@@ -137,8 +151,19 @@ if __name__ == "__main__":
     prob.driver.options['optimizer'] = 'SLSQP'
     prob.driver.options['tol'] = 1e-9
     prob.driver.options['disp'] = True
-    # prob.driver.options['debug_print'] = ['objs']
-    prob.driver.options['maxiter'] = 3
+    prob.driver.options['maxiter'] = 10
+
+
+    # COBYLA optimizer (gradient-free)
+    # prob.driver = om.ScipyOptimizeDriver()
+    # prob.driver.options['optimizer'] = 'COBYLA'
+    # prob.driver.options['tol'] = 1e-9
+    # prob.driver.options['disp'] = True
+    # prob.driver.opt_settings['rhobeg'] = 0.002
+    # prob.driver.opt_settings['catol'] = 1e-6
+    # # prob.driver.options['debug_print'] = ['objs']
+    # prob.driver.options['maxiter'] = 25
+
 
     prob.setup()
     prob.run_driver()
@@ -167,7 +192,7 @@ if __name__ == "__main__":
         print("Computing von Mises stresses...")
 
     von_Mises_tops = []
-    for i in range(shell_sim.problem.num_surfs):
+    for i in range(shell_sim.num_surfs):
         spline_stress = ShellStressSVK(shell_sim.problem.splines[i], 
                                     shell_sim.problem.spline_funcs[i],
                                     shell_sim.E, shell_sim.nu, shell_sim.h_th[i], linearize=True,) 
@@ -182,12 +207,12 @@ if __name__ == "__main__":
         print("Saving results...")
 
     if save_disp:
-        for i in range(shell_sim.problem.num_surfs):
+        for i in range(shell_sim.num_surfs):
             save_results(shell_sim.splines[i], shell_sim.problem.spline_funcs[i], i, 
                         save_path=SAVE_PATH, folder="results/", 
                         save_cpfuncs=True, comm=worldcomm)
     if save_stress:
-        for i in range(shell_sim.problem.num_surfs):
+        for i in range(shell_sim.num_surfs):
             von_Mises_tops[i].rename("von_Mises_top_"+str(i), 
                                     "von_Mises_top_"+str(i))
             File(SAVE_PATH+"results/von_Mises_top_"+str(i)+".pvd") \

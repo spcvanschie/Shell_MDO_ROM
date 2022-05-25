@@ -2,11 +2,13 @@ from dolfin import *
 from tIGAr import *
 from tIGAr.BSplines import *
 from tIGAr.NURBS import *
+import scipy as sp
 
 from PENGoLINS.nonmatching_utils import *
 
 """
-Taken from PENGoLINS optimization example from fe-iga-mdao-sandbox
+Taken from PENGoLINS optimization example from fe-iga-mdao-sandbox. 
+Some routines might have been modified or added.
 """
 
 def array2petsc_vec(ndarray, comm=worldcomm):
@@ -73,6 +75,33 @@ def update_nest_vec(vec_array, nest_vec, comm=worldcomm):
     sub_array = np.concatenate(sub_array_list)
     nest_vec.setArray(sub_array)
     nest_vec.assemble()
+
+def petsc_vec_to_aijmat(vec, comm=worldcomm):
+    vec_arr = vec.array
+    vec_sparse = sp.sparse.csr_matrix(np.expand_dims(vec_arr, 1))
+    # A_new = PETSc.Mat(comm)
+    # A_new.createAIJ((vec_arr.shape[0],1), comm=comm)
+    # A_new.setPreallocationNNZ([vec_arr.shape[0], 1])
+    # # A_new.setOption(PETSc.Mat.Option.NEW_NONZERO_ALLOCATION_ERR, False)
+    # # A_new.setUp()
+    # # A_new.assemble()
+    # A_new.setValues(np.linspace(0,vec_arr.shape[0]-1,vec_arr.shape[0], dtype=int), col_ind_subs[col_range_iter], 
+    #                                     vec_arr)
+    # A_new.setUp()
+    # A_new.assemble()
+
+    # A = PETSc.Mat().create()
+    # A.setSizes([vec_arr.shape[0], 1])
+    # A.setType("aij")
+    # A.setUp()
+
+    # First arg is list of row indices, second list of column indices
+    # A.setValues(vec_sparse.indptr, vec_sparse.indices, vec_sparse.data)
+    # A.assemble()
+
+    A = PETSc.Mat().createAIJ(size=vec_sparse.shape, csr=(vec_sparse.indptr, vec_sparse.indices, vec_sparse.data))
+    return A
+
 
 
 def PETSc_ksp_solve(A, x, b, ksp_type='cg', pc_type ='jacobi', 
