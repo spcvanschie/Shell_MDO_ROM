@@ -107,7 +107,7 @@ class ShellGroup(om.Group):
         # constraints: max tip displacement and max von Mises stress
         self.add_constraint('constraints_comp.tip_disp', upper=0.1)
         self.add_constraint('constraints_comp.max_von_Mises_stress', upper=1.)
-        self.add_constraint('h_th_range', lower=2e-3, upper=5e-2)
+        self.add_constraint('constraints_comp.h_th_range', lower=2e-3, upper=5e-2)
 
 
 if __name__ == "__main__":
