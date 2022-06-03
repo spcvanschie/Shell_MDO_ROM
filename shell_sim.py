@@ -5,6 +5,8 @@ from tIGAr.BSplines import *
 from PENGoLINS.occ_utils import *
 from opt_utils import *
 
+from nonmatching_coupling_mod import *
+
 import openmdao.api as om 
 
 from geom_utils import *
@@ -85,7 +87,7 @@ class ShellSim:
         self.iga_dof = np.sum(self.iga_dofs)
 
         # Create non-matching problem
-        self.problem = NonMatchingCoupling(self.splines, self.E, self.h_th, self.nu, comm=self.comm)
+        self.problem = NonMatchingCouplingMod(self.splines, self.E, self.h_th, self.nu, comm=self.comm)
         self.nonmatching_setup_is_done = False
         self.nonmatching_setup()
 

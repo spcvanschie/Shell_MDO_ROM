@@ -79,7 +79,7 @@ class ConstraintsComp(om.ExplicitComponent):
 
 
         partials['tip_disp', 'h_th'] = -self.dGdu@dresdu_np_inv@dresdt_np
-        print("max partial deriv of tip_disp wrt h_th: {}".format(np.max(np.abs(partials['tip_disp', 'h_th']))))
+        # print("max partial deriv of tip_disp wrt h_th: {}".format(np.max(np.abs(partials['tip_disp', 'h_th']))))
         # partials['tip_disp', 'displacements'] = self.dGdu
         
 
