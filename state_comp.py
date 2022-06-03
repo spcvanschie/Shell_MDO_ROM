@@ -10,6 +10,9 @@ from PENGoLINS.occ_utils import *
 from opt_utils import *
 from shell_sim import *
 
+import time
+import os
+
 class StateComp(om.ImplicitComponent):
 
     def initialize(self):
@@ -19,6 +22,12 @@ class StateComp(om.ImplicitComponent):
     def setup(self):
         self.shell_sim = self.options['shell_sim']
         self.print_info = True
+        self.print_idx = 0
+        # define snapshot data folder path, create if it does not yet exist
+        self.cwd = os.getcwd()
+        self.folder_path = os.path.join(self.cwd, 'snapshot_data_{}_DoFs'.format(self.shell_sim.iga_dof))
+        if not os.path.isfile(self.folder_path):
+            os.mkdir(self.folder_path)
 
         self.add_input('h_th', shape=(self.shell_sim.num_surfs,), 
                                val=np.ones(self.shell_sim.num_surfs)*0.01)
@@ -67,6 +76,7 @@ class StateComp(om.ImplicitComponent):
         """
         Solve displacements for SVK residual.
         """
+        time_start = time.time()
 
         if self.print_info:
             if MPI.rank(self.shell_sim.comm) == 0:
@@ -78,11 +88,14 @@ class StateComp(om.ImplicitComponent):
         self.shell_sim.update_external_loads()
         self.shell_sim.update_SVK_residuals()
         
+        time_post_update = time.time()
 
         self.shell_sim.problem.set_residuals(self.shell_sim.residuals)
 
         # this derivative computation is just here for debugging purposes
-        self.shell_sim.dRdt()
+        # self.shell_sim.dRdt()
+
+        time_pre_solve = time.time()
 
         _, u_iga = self.shell_sim.problem.\
                    solve_nonlinear_nonmatching_problem(
@@ -95,6 +108,21 @@ class StateComp(om.ImplicitComponent):
         if self.print_info:
             if MPI.rank(self.shell_sim.comm) == 0:
                 print("--- Finished solve_nonlinear ...")
+        
+        # save thickness inputs and displacements to csv files
+        np.savetxt(os.path.join(self.folder_path, "disp_{}".format(self.print_idx)), get_petsc_vec_array(u_iga, self.shell_sim.comm), delimiter=",")
+        np.savetxt(os.path.join(self.folder_path, "h_th_{}".format(self.print_idx)), inputs['h_th'], delimiter=",")
+        print("Saved displacement and thickness results with suffix {}".format(self.print_idx))
+        
+        self.print_idx += 1
+
+        time_end = time.time()
+        print("-------------")
+        print("Solve_nonlinear, update time: {}:".format(time_post_update-time_start))
+        print("Solve_nonlinear, set_residuals time: {}:".format(time_pre_solve-time_post_update))
+        print("Solve_nonlinear, solving time: {}:".format(time_end-time_pre_solve))
+        print("Solve_nonlinear, total time: {}".format(time_end-time_start))
+        print("-------------")
 
 
     def linearize(self, inputs, outputs, jacobian):

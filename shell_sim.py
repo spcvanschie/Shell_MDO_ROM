@@ -8,7 +8,7 @@ from opt_utils import *
 import openmdao.api as om 
 
 from geom_utils import *
-
+from nonmatching_coupling_mod import *
 
 class ShellSim:
     def __init__(self, p, E, nu, rho, n_load, 
@@ -85,7 +85,7 @@ class ShellSim:
         self.iga_dof = np.sum(self.iga_dofs)
 
         # Create non-matching problem
-        self.problem = NonMatchingCoupling(self.splines, self.E, self.h_th, self.nu, comm=self.comm)
+        self.problem = NonMatchingCouplingMod(self.splines, self.E, self.h_th, self.nu, comm=self.comm)
         self.nonmatching_setup_is_done = False
         self.nonmatching_setup()
 
