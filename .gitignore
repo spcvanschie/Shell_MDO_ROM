@@ -10,4 +10,4 @@
 /load_spline_data
 /results
 /__pycache__
-
+/snapshot_data*

@@ -25,12 +25,12 @@ class StateComp(om.ImplicitComponent):
         self.print_idx = 0
         # define snapshot data folder path, create if it does not yet exist
         self.cwd = os.getcwd()
-        self.folder_path = os.path.join(self.cwd, 'snapshot_data_{}_DoFs'.format(self.shell_sim.iga_dof))
-        if not os.path.isfile(self.folder_path):
+        self.folder_path = os.path.join(self.cwd, 'snapshot_data_fullPOD_ROM_{}_DoFs'.format(self.shell_sim.iga_dof))
+        if not os.path.isdir(self.folder_path):
             os.mkdir(self.folder_path)
 
         self.add_input('h_th', shape=(self.shell_sim.num_surfs,), 
-                               val=np.ones(self.shell_sim.num_surfs)*0.01)
+                               val=np.ones(self.shell_sim.num_surfs)*0.004)
         self.add_output('displacements', shape=self.shell_sim.iga_dof)
 
         # self.declare_partials('displacements', 'h_th')
@@ -76,6 +76,8 @@ class StateComp(om.ImplicitComponent):
         """
         Solve displacements for SVK residual.
         """
+        comp_mode = "FOM"
+
         time_start = time.time()
 
         if self.print_info:
@@ -83,46 +85,116 @@ class StateComp(om.ImplicitComponent):
                 print("--- Running solve_nonlinear ...")
                 print("h_th: {}".format(inputs['h_th']))
 
-        self.shell_sim.update_h_th(inputs['h_th'])
-        self.shell_sim.update_displacements(outputs['displacements'])
-        self.shell_sim.update_external_loads()
-        self.shell_sim.update_SVK_residuals()
-        
-        time_post_update = time.time()
 
-        self.shell_sim.problem.set_residuals(self.shell_sim.residuals)
+        if comp_mode == "OI_ROM":
+            max_it=50
+            rtol=1e-3
+            ref_error = None
+            
+            # self.shell_sim.update_SVK_residuals()
+            # self.shell_sim.problem.set_residuals(self.shell_sim.residuals)
 
-        # this derivative computation is just here for debugging purposes
-        # self.shell_sim.dRdt()
+            V_mat = self.shell_sim.pod_rom.V_mat
 
-        time_pre_solve = time.time()
+            # compute parametric influences (thickness vector influence) on H_r
+            t_vec = inputs['h_th']
+            par_vec = t_vec + np.power(t_vec, 3)
+            par_vec_H = np.repeat(par_vec, self.shell_sim.pod_rom.r_list)
 
-        _, u_iga = self.shell_sim.problem.\
-                   solve_nonlinear_nonmatching_problem(
-                   max_it=30, zero_mortar_funcs=True, iga_dofs=True, 
-                   rtol=1e-3)
+            H_r_par = np.einsum('ijk, j->ijk', self.shell_sim.H_mat, par_vec_H)
 
-        outputs['displacements'] = get_petsc_vec_array(u_iga, 
-                                   self.shell_sim.comm)
+            # initialize displacement vector
+            disp_r = np.zeros((self.shell_sim.pod_rom.V_mat.shape[1],))
+            
+
+            for newton_iter in range(max_it+1):
+
+                # compute reduced KL-terms A_r, b_r
+                A_KL_r, b_KL_r = self.shell_sim.compute_reduced_KL_system(V_mat, inputs['h_th'], V_mat@disp_r)
+                
+                H_r_mat = np.einsum('ijk,k', H_r_par, disp_r)
+
+                current_norm = np.linalg.norm(V_mat@b_KL_r)
+                if newton_iter==0 and ref_error is None:
+                    ref_error = current_norm
+                
+                rel_norm = current_norm/ref_error
+                if newton_iter >= 0:
+                    if MPI.rank(self.comm) == 0:
+                        print("Solver iteration: {}, relative norm: {:.12}."
+                            .format(newton_iter, rel_norm))
+                
+                if rel_norm < rtol:
+                    if MPI.rank(self.comm) == 0:
+                        print("Newton's iteration finished in {} "
+                            "iterations (relative tolerance: {})."
+                            .format(newton_iter, rtol))
+                    break
+            
+                if newton_iter == max_it:
+                    if MPI.rank(self.comm) == 0:
+                        raise StopIteration("Nonlinear solver failed to "
+                            "converge in {} iterations.".format(max_it))
+
+                sys_mat = np.add(A_KL_r, H_r_mat)
+                sys_vec = -b_KL_r
+
+                disp_r_iter = np.linalg.solve(sys_mat, sys_vec)
+
+                disp_r = np.add(disp_r, disp_r_iter)
+
+            outputs['displacements'] = V_mat@disp_r
+
+            # save thickness inputs and displacements to csv files
+            np.savetxt(os.path.join(self.folder_path, "disp_{}".format(self.print_idx)), V_mat@disp_r, delimiter=",")
+            np.savetxt(os.path.join(self.folder_path, "h_th_{}".format(self.print_idx)), inputs['h_th'], delimiter=",")
+            print("Saved displacement and thickness results with suffix {}".format(self.print_idx))
+
+
+        elif comp_mode == "FOM":
+            self.shell_sim.update_h_th(inputs['h_th'])
+            self.shell_sim.update_displacements(outputs['displacements'])
+            self.shell_sim.update_external_loads()
+            self.shell_sim.update_SVK_residuals()
+            
+            time_post_update = time.time()
+
+            self.shell_sim.problem.set_residuals(self.shell_sim.residuals)
+
+            # this derivative computation is just here for debugging purposes
+            # self.shell_sim.dRdt()
+
+            time_pre_solve = time.time()
+
+            _, u_iga = self.shell_sim.problem.\
+                    solve_nonlinear_nonmatching_problem(
+                    max_it=30, zero_mortar_funcs=True, iga_dofs=True, 
+                    rtol=1e-3, POD_obj=self.shell_sim.pod_rom)
+
+            outputs['displacements'] = get_petsc_vec_array(u_iga, 
+                                    self.shell_sim.comm)
+
+            # save thickness inputs and displacements to csv files
+            np.savetxt(os.path.join(self.folder_path, "disp_{}".format(self.print_idx)), get_petsc_vec_array(u_iga, self.shell_sim.comm), delimiter=",")
+            np.savetxt(os.path.join(self.folder_path, "h_th_{}".format(self.print_idx)), inputs['h_th'], delimiter=",")
+            print("Saved displacement and thickness results with suffix {}".format(self.print_idx))
 
         if self.print_info:
             if MPI.rank(self.shell_sim.comm) == 0:
                 print("--- Finished solve_nonlinear ...")
         
-        # save thickness inputs and displacements to csv files
-        np.savetxt(os.path.join(self.folder_path, "disp_{}".format(self.print_idx)), get_petsc_vec_array(u_iga, self.shell_sim.comm), delimiter=",")
-        np.savetxt(os.path.join(self.folder_path, "h_th_{}".format(self.print_idx)), inputs['h_th'], delimiter=",")
-        print("Saved displacement and thickness results with suffix {}".format(self.print_idx))
+
         
         self.print_idx += 1
 
         time_end = time.time()
         print("-------------")
-        print("Solve_nonlinear, update time: {}:".format(time_post_update-time_start))
-        print("Solve_nonlinear, set_residuals time: {}:".format(time_pre_solve-time_post_update))
-        print("Solve_nonlinear, solving time: {}:".format(time_end-time_pre_solve))
-        print("Solve_nonlinear, total time: {}".format(time_end-time_start))
-        print("-------------")
+        if comp_mode == "FOM":
+            print("Solve_nonlinear, update time: {}:".format(time_post_update-time_start))
+            print("Solve_nonlinear, set_residuals time: {}:".format(time_pre_solve-time_post_update))
+            print("Solve_nonlinear, solving time: {}:".format(time_end-time_pre_solve))
+            print("Solve_nonlinear, total time: {}".format(time_end-time_start))
+            print("-------------")
 
 
     def linearize(self, inputs, outputs, jacobian):

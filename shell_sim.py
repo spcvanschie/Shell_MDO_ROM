@@ -1,3 +1,4 @@
+from re import L
 from PENGoLINS.occ_preprocessing import *
 from PENGoLINS.nonmatching_coupling import *
 from tIGAr.common import *
@@ -9,10 +10,13 @@ import openmdao.api as om
 
 from geom_utils import *
 from nonmatching_coupling_mod import *
+from rom_utils import *
+from rom_construct import *
 
 class ShellSim:
     def __init__(self, p, E, nu, rho, n_load, 
                  filename_igs, geom_scale=2.54e-5, penalty_coefficient=1.0e3, comm=worldcomm):
+        self.construct_ROM = True
 
         self.p = p
         self.E = E
@@ -73,7 +77,7 @@ class ShellSim:
         if mpirank == 0:
             print("Creating splines...")
         
-        self.h_th = self.num_surfs*[Constant(0.01)]
+        self.h_th = self.num_surfs*[Constant(0.004)]
         # Create tIGAr extracted spline instances to define baseline geometry
         self.Geometry = GeometryWithLinearTransformations(self.preprocessor)
         self.splines = self.Geometry.baseline_surfs
@@ -104,7 +108,146 @@ class ShellSim:
         # define external load vector
         self.Body_weight = 1500  # kg
         self.update_external_loads()
+        # self.update_SVK_residuals()
+
+        # construct ROMs
+        # if self.construct_ROM:
+        # start by constructing the POD bases
+        self.pod_rom = POD_ROM(self.iga_dofs, 0.9999999999, subtract_mean=False)
+        self.oi_rom = OI_ROM(self.pod_rom)
+        # self.oi_rom.construct_H_r_mask(self.problem.mapping_list)
+        # self.oi_rom.construct_H_r_mask_decoupledshells()
+
+        # self.train_H_r_decoupledshells()
+
+            # construct 
+
+
+    def extract_KL_system(self):
+        # self.update_SVK_residuals()
+        # self.problem.set_residuals(self.residuals)
+        Rt_FE, dRt_dut_FE = self.problem.assemble_KL_shells(deriv_list=False)
+        A_KL, b_KL, A_KL_list, b_KL_list = self.problem.extract_nonmatching_system(Rt_FE, dRt_dut_FE, save_as_self=False)
+
+        return A_KL, b_KL, A_KL_list, b_KL_list
+
+    def compute_reduced_KL_system(self, V_mat, h_th_vec, disp):
+        self.update_h_th(h_th_vec)
+        self.update_displacements(disp)
+        self.update_external_loads()
         self.update_SVK_residuals()
+        self.problem.set_residuals(self.residuals)
+
+        A_KL, b_KL, A_KL_list, b_KL_list = self.extract_KL_system()
+        # convert A_KL to sparse non-nested matrix
+        A_KL = create_aijmat_from_nestmat(A_KL, A_KL_list, 
+                                                comm=self.comm)
+        # convert A_KL and b_KL to numpy objects
+        A_KL_np = sp.sparse.csr_matrix((A_KL.getValuesCSR()[2], A_KL.getValuesCSR()[1], A_KL.getValuesCSR()[0]))
+        b_KL_np = b_KL.array
+
+        A_KL_r = V_mat.T@A_KL_np@V_mat
+        b_KL_r = V_mat.T@b_KL_np
+
+        return A_KL_r.toarray(), b_KL_r
+
+    def compute_reduced_KL_systems(self):
+        A_list = []
+        b_list = []
+        print("Computing KL contributions for ROM snapshots...")
+        for i in range(40): #range(self.pod_rom.num_snaps):
+            h_th_vec = self.pod_rom.t_mat[:, i]
+            disp = self.pod_rom.X_mat[:, i]
+            # self.update_h_th(h_th_vec)
+            # self.update_displacements(disp)
+            # self.update_external_loads()
+            # self.update_SVK_residuals()
+            # self.problem.set_residuals(self.residuals)
+            # compute reduced KL-terms A_r, b_r
+            A_KL_r, b_KL_r = self.compute_reduced_KL_system(self.pod_rom.V_mat, h_th_vec, disp)
+
+            A_list += [A_KL_r]
+            b_list += [b_KL_r]
+        return A_list, b_list
+
+    def train_H_r_decoupledshells(self):
+        X_list = self.pod_rom.X_mats_list
+        V_list = self.pod_rom.V_mats_list
+        
+        surf_dof_range = [0] + list(np.cumsum(self.pod_rom.dofs_per_patch))
+        surf_r_dof_range = [0] + list(np.cumsum(self.pod_rom.r_list))
+    
+        # construct KL contributions
+        print("Computing Kirchhoff-Love terms for Operator Inference...")
+        A_KL_list, b_KL_list = self.compute_reduced_KL_systems()
+
+        H_list = []
+        H_mat = np.zeros((int(np.sum(self.pod_rom.r_list)), int(np.sum(self.pod_rom.r_list)), int(np.sum(self.pod_rom.r_list))))
+
+        # loop over surfaces to solve least-squares problem independently for each
+        for i in range(len(X_list)):
+            print("Computing Operator Inference matrix for surface {}...".format(i))
+            r_i = self.pod_rom.r_list[i]
+            t_vec = self.pod_rom.t_mat[i, :]
+            V_mat = V_list[i]
+            X_mat = X_list[i]
+
+            H_d_i = np.tril(np.ones((r_i, r_i, r_i)))
+            H_r_i = np.tril(np.ones((r_i, r_i, r_i)))
+
+            # TODO: Save sparsity pattern of H_d_i and H_r_i? Can be used to reconstruct the 3D-arrays once its coefficients have been computed
+            vars_per_row = int(np.sum(H_d_i[0, :, :]))
+
+            A_ls_d_mat = np.zeros((len(A_KL_list)*r_i, r_i*vars_per_row))
+            A_ls_r_mat = np.zeros((len(A_KL_list)*r_i, r_i*vars_per_row))
+
+            b_ls_vec = np.zeros((len(A_KL_list)*r_i,))
+
+            # loop over snapshots to build the least-squares matrix and vector
+            for j in range(len(A_KL_list)):
+                # project snapshot data to POD-space
+                u_r_j = V_mat.T@X_mat[:, j]
+                
+                # compute known terms from KL shell model
+                A_KL_submat = A_KL_list[j][surf_r_dof_range[i]:surf_r_dof_range[i+1], surf_r_dof_range[i]:surf_r_dof_range[i+1]]
+                b_KL_subvec = b_KL_list[j][surf_r_dof_range[i]:surf_r_dof_range[i+1]]
+
+                KL_comb = A_KL_submat@u_r_j + b_KL_subvec
+
+                # compute parametric terms (simply scale them with the appropriate thickness for now)
+                alpha_d_approx = t_vec[j]
+                alpha_r_approx = t_vec[j]**3
+
+                # incorporate displacement and thickness values into matrices
+                H_d_i_mult = (alpha_d_approx+alpha_r_approx)*np.einsum('ijk,k,j->ijk', H_d_i, u_r_j, u_r_j)
+                # H_r_i_mult = alpha_r_approx*np.einsum('ijk,k,j->ijk', H_r_i, u_r_j, u_r_j)
+
+                # loop over rows of H_r to populate the matrices
+                for k in range(H_d_i_mult.shape[0]):
+                    H_d_i_mult_layer = H_d_i_mult[k, :, :]
+                    # H_r_i_mult_layer = H_r_i_mult[k, :, :]
+                    A_ls_d_mat[j*r_i + k, k*vars_per_row:(k+1)*vars_per_row] = H_d_i_mult_layer[H_d_i[k, :, :] > 0.]
+                    # A_ls_r_mat[j*r_i + k, k*vars_per_row:(k+1)*vars_per_row] = H_r_i_mult_layer[H_r_i[k, :, :] > 0.]
+
+                    b_ls_vec[j*r_i + k] = KL_comb[k]
+            
+            # Least-squares matrix and vector have been built, now we solve the least-squares equations
+            ATA = A_ls_d_mat.T@A_ls_d_mat
+            ATb = A_ls_d_mat.T@b_ls_vec
+            H_i_vec = np.linalg.inv(ATA)@ATb
+
+            # apply least-squares solution vector to H_i matrix
+            H_d_i[H_d_i > 0.] = H_i_vec
+            
+            # add H_i matrix to list of matrices
+            H_list += [H_d_i]
+
+            # add H_i to the overall matrix
+            H_mat[surf_r_dof_range[i]:surf_r_dof_range[i+1], surf_r_dof_range[i]:surf_r_dof_range[i+1], surf_r_dof_range[i]:surf_r_dof_range[i+1]]
+
+        self.H_mat = H_mat
+        # print("fin")
+
 
 
     def nonmatching_setup(self, penalty_coefficient=1.0e3, family0='CG', degree0=1, family1='CG', degree1=1):
@@ -296,6 +439,22 @@ class ShellSim:
         else:
             return x
 
+    def compute_block_penalty_mats(self):
+        mat_d = np.zeros((self.num_surfs, self.num_surfs))
+        mat_r = np.zeros((self.num_surfs, self.num_surfs))
+
+        alpha_d_list, alpha_r_list = compute_penalty_coefficients(self.problem.mapping_list, self.problem.hm_avg_list, 
+                                                                  self.h_th, self.E, self.nu, penalty_coefficient=self.penalty_coefficient)
+
+        for i in range(len(self.problem.mapping_list)):
+            s_ind0, s_ind1 = self.problem.mapping_list[i]
+            for s0 in [s_ind0, s_ind1]:
+                for s1 in [s_ind0, s_ind1]:
+                    mat_d[s0, s1] += alpha_d_list[i]
+                    mat_r[s0, s1] += alpha_r_list[i]
+        
+        self.mat_d = mat_d
+        self.mat_r = mat_r
 
 
 class GeometryWithLinearTransformations():

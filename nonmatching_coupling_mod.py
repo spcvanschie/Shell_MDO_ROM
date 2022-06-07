@@ -3,6 +3,175 @@ from PENGoLINS.nonmatching_coupling import *
 import time
 
 class NonMatchingCouplingMod(NonMatchingCoupling):
+    def mortar_meshes_setup(self, mapping_list, mortar_parametric_coords, 
+                            penalty_coefficient=1000):
+        """
+        Set up coupling of non-matching system for mortar meshes.
+
+        Parameters
+        ----------
+        mapping_list : list of ints
+        mortar_parametric_coords : list of ndarrays
+        penalty_coefficient : float, optional, default is 1000
+        """
+        self._create_mortar_vars()
+        self.mapping_list = mapping_list
+        self.penalty_coefficient = penalty_coefficient
+        self.t1_A_list = []
+        self.t2_A_list = []
+        self.transfer_matrices_list = []
+        self.transfer_matrices_control_list = []
+        self.transfer_matrices_linear_list = []
+        self.hm_avg_list = []
+
+        # print("checkpoint 1")
+
+        for i in range(self.num_interfaces):
+            transfer_matrices = [[], []]
+            transfer_matrices_control = [[], []]
+            transfer_matrices_linear = [[], []]
+            if self.h_th_is_function:
+                transfer_matrices_thickness = [[], []]
+            for j in range(len(self.mapping_list[i])):
+                # print("checkpoint pre-2, i: {}, j: {}".format(i, j))
+                move_mortar_mesh(self.mortar_meshes[i], 
+                                 mortar_parametric_coords[i][j])
+                if j == 0:
+                    t11, t21 = tangent_components(self.mortar_meshes[i])
+                    self.t1_A_list += [t11]
+                    self.t2_A_list += [t21]
+
+                # print("checkpoint 2, i: {}, j: {}".format(i, j))
+                # Create transfer matrices
+                transfer_matrices[j] = create_transfer_matrix_list(
+                    self.splines[self.mapping_list[i][j]].V, 
+                    self.Vms[i], self.dVms[i])
+                # print("checkpoint 2a, i: {}, j: {}".format(i, j))
+                transfer_matrices_control[j] = create_transfer_matrix_list(
+                    self.splines[self.mapping_list[i][j]].V_control, 
+                    self.Vms_control[i], self.dVms_control[i])
+                # print("checkpoint 2b, i: {}, j: {}".format(i, j))
+                transfer_matrices_linear[j] = create_transfer_matrix(
+                    self.splines[self.mapping_list[i][j]].V_linear,
+                    self.Vms_control[i])
+                # print("checkpoint 2c, i: {}, j: {}".format(i, j))
+
+            # Store transfers in lists for future use
+            self.transfer_matrices_list += [transfer_matrices,]
+            self.transfer_matrices_control_list += [transfer_matrices_control]
+            self.transfer_matrices_linear_list += [transfer_matrices_linear,]
+
+            # print("checkpoint 2.5, i: {}".format(i))
+
+            s_ind0, s_ind1 = self.mapping_list[i]
+            # Compute element length
+            h0 = spline_mesh_size(self.splines[s_ind0])
+            h0_func = self.splines[s_ind0]\
+                .projectScalarOntoLinears(h0, lumpMass=True)
+            h0m = Function(self.Vms_control[i])
+            A_x_b(transfer_matrices_linear[0], h0_func.vector(), h0m.vector())
+            h1 = spline_mesh_size(self.splines[s_ind1])
+            h1_func = self.splines[s_ind1]\
+                .projectScalarOntoLinears(h1, lumpMass=True)
+            h1m = Function(self.Vms_control[i])
+            A_x_b(transfer_matrices_linear[1], h1_func.vector(), h1m.vector())
+            hm_avg = 0.5*(h0m+h1m)
+            self.hm_avg_list += [hm_avg,]
+
+        # print("checkpoint 3")
+
+        if self.h_th_is_function:
+            self._create_transfer_matrices_thickness()
+        
+        # print("checkpoint 4")
+        self.penalty_parameters()
+
+    def penalty_parameters(self, E=None, h_th=None, nu=None, 
+                           method='minimum'):
+        """
+        Create lists for pealty paramters for displacement and rotation.
+
+        Parameters
+        ----------
+        E : ufl Constant or list, Young's modulus
+        h_th : ufl Constant or list, thickness of the splines
+        nu : ufl Constant or list, Poisson's ratio
+        method: str, {'minimum', 'maximum', 'average'}
+        """
+        # First initialize material and geometric paramters, then
+        # check if h_th is DOLFIN function and if the transfer
+        # matrices are created for the thickness.
+        self._init_properties(E, h_th, nu)
+        if (self.h_th_is_function and not 
+            hasattr(self, 'transfer_matrices_thickness_list')):
+            self._create_transfer_matrices_thickness()
+
+        self.alpha_d_list = []
+        self.alpha_r_list = []
+
+        for i in range(self.num_interfaces):
+            s_ind0, s_ind1 = self.mapping_list[i]
+
+            # # Original implementation
+            # # Use "Minimum" method for spline patches with different
+            # # material properties. 
+            # # For other methods, see Herrema et al. Section 4.2
+            # # For uniform isotropic material:
+            # max_Aij0 = float(self.E[s_ind0]*self.h_th[s_ind0]\
+            #            /(1-self.nu[s_ind0]**2))
+            # max_Aij1 = float(self.E[s_ind1]*self.h_th[s_ind1]\
+            #            /(1-self.nu[s_ind1]**2))
+            # alpha_d = Constant(self.penalty_coefficient)\
+            #           /self.hm_avg_list[i]*min(max_Aij0, max_Aij1)
+            # max_Dij0 = float(self.E[s_ind0]*self.h_th[s_ind0]**3\
+            #            /(12*(1-self.nu[s_ind0]**2)))
+            # max_Dij1 = float(self.E[s_ind1]*self.h_th[s_ind1]**3\
+            #            /(12*(1-self.nu[s_ind1]**2)))
+            # alpha_r = Constant(self.penalty_coefficient)\
+            #           /self.hm_avg_list[i]*min(max_Dij0, max_Dij1)
+            # self.alpha_d_list += [alpha_d,]
+            # self.alpha_r_list += [alpha_r,]
+
+            if self.h_th_is_function:
+                h_th0 = Function(self.Vms_control[i])
+                h_th1 = Function(self.Vms_control[i])
+                A_x_b(self.transfer_matrices_thickness_list[i][0],
+                      self.h_th[s_ind0].vector(), h_th0.vector())
+                A_x_b(self.transfer_matrices_thickness_list[i][1],
+                      self.h_th[s_ind1].vector(), h_th1.vector())
+            else:
+                h_th0 = self.h_th[s_ind0]
+                h_th1 = self.h_th[s_ind1]
+
+            max_Aij0 = self.E[s_ind0]*h_th0\
+                       /(1-self.nu[s_ind0]**2)
+            max_Aij1 = self.E[s_ind1]*h_th1\
+                       /(1-self.nu[s_ind1]**2)
+            max_Dij0 = self.E[s_ind0]*h_th0**3\
+                       /(12*(1-self.nu[s_ind0]**2))
+            max_Dij1 = self.E[s_ind1]*h_th1**3\
+                       /(12*(1-self.nu[s_ind1]**2))
+
+            if method == 'minimum':
+                alpha_d = Constant(self.penalty_coefficient)\
+                          /self.hm_avg_list[i]*min_value(max_Aij0, max_Aij1)
+                alpha_r = Constant(self.penalty_coefficient)\
+                          /self.hm_avg_list[i]*min_value(max_Dij0, max_Dij1)
+            elif method == 'maximum':
+                alpha_d = Constant(self.penalty_coefficient)\
+                          /self.hm_avg_list[i]*max_value(max_Aij0, max_Aij1)
+                alpha_r = Constant(self.penalty_coefficient)\
+                          /self.hm_avg_list[i]*max_value(max_Dij0, max_Dij1)
+            elif method == 'average':
+                alpha_d = Constant(self.penalty_coefficient)\
+                          /self.hm_avg_list[i]*(max_Aij0+max_Aij1)*0.5
+                alpha_r = Constant(self.penalty_coefficient)\
+                          /self.hm_avg_list[i]*(max_Dij0+max_Dij1)*0.5
+            else:
+                raise TypeError("Method:", method, "is not supported.")
+            self.alpha_d_list += [alpha_d,]
+            self.alpha_r_list += [alpha_r,]
+
     def assemble_nonmatching(self):
         """
         Assemble the non-matching system.
@@ -21,8 +190,63 @@ class NonMatchingCouplingMod(NonMatchingCoupling):
                                    "not specified.")
 
         # Compute contributions from shell residuals and derivatives
+        R_FE, dR_du_FE = self.assemble_KL_shells()
+        time_post_shell_assemble = time.time()
+
+        # Step 2: assemble non-matching contributions
+        # Create empty lists for non-matching contributions
+        Rm_FE, dRm_dum_FE = self.assemble_intersections()
+
+        time_post_nonmatching = time.time()
+
+        # Step 3: add spline residuals and non-matching 
+        # contribution together
+        for i in range(self.num_splines):
+            if Rm_FE[i] is not None:
+                Rm_FE[i] += R_FE[i]
+                dRm_dum_FE[i][i] += dR_du_FE[i]
+            else:
+                Rm_FE[i] = R_FE[i]
+                dRm_dum_FE[i][i] = dR_du_FE[i]
+
+        time_post_assemble = time.time()
+
+        # Step 4: add contact contributions if contact is given
+        if self.contact is not None:
+            Kcs, Fcs = self.contact.assembleContact(self.spline_funcs, 
+                                                    output_PETSc=True)
+            for i in range(self.num_splines):
+                if Rm_FE[i] is None:
+                    Rm_FE[i] = Fcs[i]
+                elif Rm_FE[i] is not None and Fcs[i] is not None:
+                    Rm_FE[i] += Fcs[i]
+                for j in range(self.num_splines):
+                    if dRm_dum_FE[i][j] is None:
+                        dRm_dum_FE[i][j] = Kcs[i][j]
+                    elif dRm_dum_FE[i][j] is not None \
+                        and Kcs[i][j] is not None:
+                        dRm_dum_FE[i][j] += Kcs[i][j]
+
+        time_post_contact = time.time()
+
+        print("-------------")
+        print("Nonmatching assembly times:")
+        print("Shell assembly: {}".format(time_post_shell_assemble-time_start))
+        print("Nonmatching assemble: {}".format(time_post_nonmatching-time_post_shell_assemble))
+        print("Combine assemblies: {}".format(time_post_assemble-time_post_nonmatching))
+        print("Contact assemble: {}".format(time_post_contact-time_post_assemble))
+        print("Total time: {}".format(time_post_contact-time_start))
+        print("-------------")
+
+        return dRm_dum_FE, Rm_FE
+
+    def assemble_KL_shells(self, deriv_list=True):
         R_FE = []
-        dR_du_FE = []
+        if deriv_list:
+            dR_du_FE = []
+        else:
+            dR_du_FE = [[None for i1 in range(self.num_splines)] 
+                      for i2 in range(self.num_splines)]
         for i in range(self.num_splines):
             R_assemble = assemble(self.residuals[i])
             dR_du_assemble = assemble(self.deriv_residuals[i])
@@ -31,19 +255,18 @@ class NonMatchingCouplingMod(NonMatchingCoupling):
                     if ps_ind == i:
                         self.point_sources[j].apply(R_assemble)
             R_FE += [v2p(R_assemble),]
-            dR_du_FE += [m2p(dR_du_assemble),]
-
-        time_post_shell_assemble = time.time()
-
-        # Step 2: assemble non-matching contributions
-        # Create empty lists for non-matching contributions
+            if deriv_list:
+                dR_du_FE += [m2p(dR_du_assemble),]
+            else:
+                dR_du_FE[i][i] = m2p(dR_du_assemble)
+        return R_FE, dR_du_FE
+    
+    def assemble_intersections(self):
         Rm_FE = [None for i1 in range(self.num_splines)]
         dRm_dum_FE = [[None for i1 in range(self.num_splines)] 
                       for i2 in range(self.num_splines)]
 
-        # add_nonmatching = True
-        # if add_nonmatching:
-        #     print("Adding non-matching contributions ...")
+        # TODO: Add function to update 
 
         # Compute non-matching contributions ``Rm_FE`` and 
         # ``dRm_dum_FE``.
@@ -94,49 +317,60 @@ class NonMatchingCouplingMod(NonMatchingCoupling):
                     else:
                         dRm_dum_FE[self.mapping_list[i][j]]\
                             [self.mapping_list[i][k]] = dRm_dum[j][k]
+        return Rm_FE, dRm_dum_FE
 
-        time_post_nonmatching = time.time()
+    def extract_nonmatching_system(self, Rt_FE, dRt_dut_FE, save_as_self=True):
+        """
+        Extract matrix and vector to IGA space.
 
-        # Step 3: add spline residuals and non-matching 
-        # contribution together
+        Parameters
+        ----------
+        Rt_FE : list of assembled vectors
+        dRt_dut_FE : list of assembled matrices
+
+        Returns
+        -------
+        b : petsc4py.PETSc.Vec
+            LHS of non-matching system
+        A : petsc4py.PETSc.Mat
+            RHS of non-matching system
+        """
+        Rt_IGA = []
+        dRt_dut_IGA = []
         for i in range(self.num_splines):
-            if Rm_FE[i] is not None:
-                Rm_FE[i] += R_FE[i]
-                dRm_dum_FE[i][i] += dR_du_FE[i]
-            else:
-                Rm_FE[i] = R_FE[i]
-                dRm_dum_FE[i][i] = dR_du_FE[i]
+            Rt_IGA += [v2p(FE2IGA(self.splines[i], Rt_FE[i], True)),]
+            # Rt_IGA += [AT_x(self.splines[i].M, Rt_FE[i]),]
+            dRt_dut_IGA += [[],]
+            for j in range(self.num_splines):
+                if dRt_dut_FE[i][j] is not None:
+                    dRm_dum_IGA_temp = AT_R_B(m2p(self.splines[i].M), 
+                                  dRt_dut_FE[i][j], m2p(self.splines[j].M))
 
-        time_post_assemble = time.time()
+                    if i==j:
+                        dRm_dum_IGA_temp = apply_bcs_mat(self.splines[i], 
+                                           dRm_dum_IGA_temp, diag=1)
+                    else:
+                        dRm_dum_IGA_temp = apply_bcs_mat(self.splines[i], 
+                                           dRm_dum_IGA_temp, self.splines[j], 
+                                           diag=0)
+                else:
+                    dRm_dum_IGA_temp = None
 
-        # Step 4: add contact contributions if contact is given
-        if self.contact is not None:
-            Kcs, Fcs = self.contact.assembleContact(self.spline_funcs, 
-                                                    output_PETSc=True)
-            for i in range(self.num_splines):
-                if Rm_FE[i] is None:
-                    Rm_FE[i] = Fcs[i]
-                elif Rm_FE[i] is not None and Fcs[i] is not None:
-                    Rm_FE[i] += Fcs[i]
-                for j in range(self.num_splines):
-                    if dRm_dum_FE[i][j] is None:
-                        dRm_dum_FE[i][j] = Kcs[i][j]
-                    elif dRm_dum_FE[i][j] is not None \
-                        and Kcs[i][j] is not None:
-                        dRm_dum_FE[i][j] += Kcs[i][j]
+                dRt_dut_IGA[i] += [dRm_dum_IGA_temp,]
 
-        time_post_contact = time.time()
+        A_list = dRt_dut_IGA
+        b_list = Rt_IGA
 
-        print("-------------")
-        print("Nonmatching assembly times:")
-        print("Shell assembly: {}".format(time_post_shell_assemble-time_start))
-        print("Nonmatching assemble: {}".format(time_post_nonmatching-time_post_shell_assemble))
-        print("Combine assemblies: {}".format(time_post_assemble-time_post_nonmatching))
-        print("Contact assemble: {}".format(time_post_contact-time_post_assemble))
-        print("Total time: {}".format(time_post_contact-time_start))
-        print("-------------")
+        b = create_nest_PETScVec(Rt_IGA, comm=self.comm)
+        A = create_nest_PETScMat(dRt_dut_IGA, comm=self.comm)
 
-        return dRm_dum_FE, Rm_FE
+        if save_as_self:
+            self.A_list = A_list
+            self.b_list = b_list
+            self.A = A
+            self.b = b
+
+        return A, b, A_list, b_list
 
     def solve_nonlinear_nonmatching_problem(self, solver="direct", 
                                             ref_error=None, rtol=1e-3, max_it=20,
@@ -148,7 +382,7 @@ class NonMatchingCouplingMod(NonMatchingCoupling):
                                             fieldsplit_pc_type=PETSc.PC.Type.LU, 
                                             ksp_rtol=1e-15, ksp_max_it=100000,
                                             ksp_view=False, ksp_monitor_residual=False, 
-                                            iga_dofs=False):
+                                            iga_dofs=False, POD_obj=None):
 
         time_start = time.time()
 
@@ -235,13 +469,68 @@ class NonMatchingCouplingMod(NonMatchingCoupling):
                     raise StopIteration("Nonlinear solver failed to "
                           "converge in {} iterations.".format(max_it))
 
-            du_list = []
-            du_IGA_list = []
-            for i in range(self.num_splines):
-                du_list += [Function(self.splines[i].V),]
-                du_IGA_list += [zero_petsc_vec(self.splines[i].M.size(1), 
-                                               comm=self.splines[i].comm)]
-            du = create_nest_PETScVec(du_IGA_list, comm=self.comm)
+
+            # map quantities to POD basis if POD_obj is defined
+            if POD_obj is not None:
+                du_IGA_r_list = []
+                for i in range(self.num_splines):
+                    du_IGA_r_list += [zero_petsc_vec(POD_obj.r_list[i], 
+                                                comm=self.splines[i].comm)]
+                
+                du = create_nest_PETScVec(du_IGA_r_list, comm=self.comm)
+
+                # generate reduced A_list and use it to generate a new A matrix
+                A_r_list = []
+
+                for i in range(self.num_splines):
+
+                    A_r_list += [[],]
+
+                    for j in range(self.num_splines):
+                        A_submat = self.A_list[i][j]
+                        if A_submat is not None:
+                            V_submat_l = POD_obj.V_blocks_petsc[i][i]
+                            V_submat_r = POD_obj.V_blocks_petsc[j][j]
+                            A_r_list[i] += [V_submat_l.transposeMatMult(A_submat).matMult(V_submat_r)]
+                        else:
+                            A_r_list[i] += [None]
+
+                self.A = create_nest_PETScMat(A_r_list, comm=self.comm)
+
+                # convert A matrix to correct form
+                if solver == "direct":
+                    if MPI.size(self.comm) == 1:
+                        self.A.convert("seqaij")
+                    else:
+                        self.A = create_aijmat_from_nestmat(self.A, A_r_list, 
+                                                            comm=self.comm)
+
+                if solver == "ksp" and pc_type != PETSc.PC.Type.FIELDSPLIT:
+                    self.A = create_aijmat_from_nestmat(self.A, A_r_list, 
+                                                        comm=self.comm)
+
+                # generate reduced b_list and use it to generate a new b vector
+                b_r_list = []
+                
+                for i in range(self.num_splines):
+                    b_subvec = self.b_list[i]
+                    V_submat = POD_obj.V_blocks_petsc[i][i]
+
+                    b_r = V_submat.createVecRight()
+                    V_submat.multTranspose(b_subvec, b_r)
+                    b_r_list += [b_r]
+
+
+                self.b = create_nest_PETScVec(b_r_list, comm=self.comm)
+            else:
+                du_list = []
+                du_IGA_list = []
+                for i in range(self.num_splines):
+                    du_list += [Function(self.splines[i].V),]
+                    du_IGA_list += [zero_petsc_vec(self.splines[i].M.size(1), 
+                                                comm=self.splines[i].comm)]
+
+                du = create_nest_PETScVec(du_IGA_list, comm=self.comm)
 
             solve_nonmatching_mat(self.A, du, -self.b, solver=solver,
                                   ksp_type=ksp_type, pc_type=pc_type, 
@@ -252,6 +541,26 @@ class NonMatchingCouplingMod(NonMatchingCoupling):
                                   ksp_view=ksp_view, 
                                   monitor_residual=ksp_monitor_residual)
 
+            # if a POD-ROM is used, convert du back to its full size for the rest of the computations
+            if POD_obj is not None:
+                du_list = []
+                du_IGA_list = []
+                
+                for i, subvec in enumerate(du_IGA_r_list):
+                    du_list += [Function(self.splines[i].V),]
+
+                    V_submat = POD_obj.V_blocks_petsc[i][i]
+
+                    iga_petsc_vec = zero_petsc_vec(self.splines[i].M.size(1), 
+                                                comm=self.splines[i].comm)
+
+                    V_submat.mult(subvec, iga_petsc_vec)
+                    du_IGA_list += [iga_petsc_vec]
+
+                du = create_nest_PETScVec(du_IGA_list, comm=self.comm)
+
+                # if POD_obj.subtract_mean:
+                    # du -= POD_obj.avg_iga_vec_petsc
 
             if iga_dofs:
                 u_iga += du

@@ -77,7 +77,7 @@ class ShellGroup(om.Group):
         # define optimization inputs
         inputs_comp = om.IndepVarComp()
         inputs_comp.add_output('h_th', shape=(self.shell_sim.num_surfs,),
-                              val=np.ones(self.shell_sim.num_surfs)*0.01)
+                              val=np.ones(self.shell_sim.num_surfs)*0.004)
         self.add_subsystem('inputs_comp', inputs_comp)
 
         # define solution state computation class (wraps both FOM and ROM)
@@ -158,8 +158,8 @@ if __name__ == "__main__":
     prob.driver.options['tol'] = 1e-9
     prob.driver.options['disp'] = True
     prob.driver.opt_settings['rhobeg'] = 0.008
-    prob.driver.opt_settings['catol'] = 1e-10
-    prob.driver.options['maxiter'] = 25
+    prob.driver.opt_settings['catol'] = 1e-14
+    prob.driver.options['maxiter'] = 50
 
 
     prob.setup()

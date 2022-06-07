@@ -30,7 +30,7 @@ class ConstraintsComp(om.ExplicitComponent):
 
         self.add_input('displacements', shape=self.shell_sim.iga_dof)
         self.add_input('h_th', shape=(self.shell_sim.num_surfs,), 
-                       val=np.ones(self.shell_sim.num_surfs)*0.01)
+                       val=np.ones(self.shell_sim.num_surfs)*0.004)
 
         self.add_output('tip_disp', shape=1)
         self.add_output('max_von_Mises_stress', shape=1)
@@ -63,7 +63,7 @@ class ConstraintsComp(om.ExplicitComponent):
                 print("--- Evaluating constraints ...")
                 print("Tip displacement: {}".format(outputs['tip_disp']))
                 # print("Tip displacement from derivatives: {}".format(self.dGdu@inputs['displacements']))
-                # print("Max Von Mises stress: {}".format(outputs['max_von_Mises_stress']))
+                print("Max Von Mises stress: {}".format(outputs['max_von_Mises_stress']))
     
     def compute_partials(self, inputs, partials):
         self.shell_sim.update_displacements(inputs['displacements'])
