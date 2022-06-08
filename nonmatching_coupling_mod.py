@@ -406,9 +406,6 @@ class NonMatchingCouplingMod(NonMatchingCoupling):
                 self.spline_funcs[i].interpolate(Constant((0.,0.,0.)))
             u_iga = create_nest_PETScVec(u_iga_list, comm=self.comm)
         
-        if POD_obj.subtract_mean:
-            u_iga += POD_obj.avg_iga_vec_petsc
-
         time_start_loop = time.time()
         presolve_loop_time = time_start_loop-time_start
         assembly_time = 0.
@@ -595,6 +592,9 @@ class NonMatchingCouplingMod(NonMatchingCoupling):
                         du_IGA_list += [petsc_vec_test]
 
                     du = create_nest_PETScVec(du_IGA_list, comm=self.comm)
+
+                if POD_obj.subtract_mean and newton_iter == 0:
+                    du += POD_obj.avg_iga_vec_petsc
 
             if iga_dofs:
                 u_iga += du
