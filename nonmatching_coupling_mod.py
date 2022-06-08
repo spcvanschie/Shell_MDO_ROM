@@ -472,56 +472,71 @@ class NonMatchingCouplingMod(NonMatchingCoupling):
 
             # map quantities to POD basis if POD_obj is defined
             if POD_obj is not None:
-                du_IGA_r_list = []
-                for i in range(self.num_splines):
-                    du_IGA_r_list += [zero_petsc_vec(POD_obj.r_list[i], 
-                                                comm=self.splines[i].comm)]
-                
-                du = create_nest_PETScVec(du_IGA_r_list, comm=self.comm)
+                if POD_obj.basistype != "Global":
+                    du_IGA_r_list = []
+                    for i in range(self.num_splines):
+                        du_IGA_r_list += [zero_petsc_vec(POD_obj.r_list[i], 
+                                                    comm=self.splines[i].comm)]
+                    
+                    du = create_nest_PETScVec(du_IGA_r_list, comm=self.comm)
 
-                # generate reduced A_list and use it to generate a new A matrix
-                A_r_list = []
+                    # generate reduced A_list and use it to generate a new A matrix
+                    A_r_list = []
 
-                for i in range(self.num_splines):
+                    for i in range(self.num_splines):
 
-                    A_r_list += [[],]
+                        A_r_list += [[],]
 
-                    for j in range(self.num_splines):
-                        A_submat = self.A_list[i][j]
-                        if A_submat is not None:
-                            V_submat_l = POD_obj.V_blocks_petsc[i][i]
-                            V_submat_r = POD_obj.V_blocks_petsc[j][j]
-                            A_r_list[i] += [V_submat_l.transposeMatMult(A_submat).matMult(V_submat_r)]
+                        for j in range(self.num_splines):
+                            A_submat = self.A_list[i][j]
+                            if A_submat is not None:
+                                V_submat_l = POD_obj.V_blocks_petsc[i][i]
+                                V_submat_r = POD_obj.V_blocks_petsc[j][j]
+                                A_r_list[i] += [V_submat_l.transposeMatMult(A_submat).matMult(V_submat_r)]
+                            else:
+                                A_r_list[i] += [None]
+
+                    self.A = create_nest_PETScMat(A_r_list, comm=self.comm)
+
+                    # convert A matrix to correct form
+                    if solver == "direct":
+                        if MPI.size(self.comm) == 1:
+                            self.A.convert("seqaij")
                         else:
-                            A_r_list[i] += [None]
+                            self.A = create_aijmat_from_nestmat(self.A, A_r_list, 
+                                                                comm=self.comm)
 
-                self.A = create_nest_PETScMat(A_r_list, comm=self.comm)
-
-                # convert A matrix to correct form
-                if solver == "direct":
-                    if MPI.size(self.comm) == 1:
-                        self.A.convert("seqaij")
-                    else:
+                    if solver == "ksp" and pc_type != PETSc.PC.Type.FIELDSPLIT:
                         self.A = create_aijmat_from_nestmat(self.A, A_r_list, 
                                                             comm=self.comm)
 
-                if solver == "ksp" and pc_type != PETSc.PC.Type.FIELDSPLIT:
-                    self.A = create_aijmat_from_nestmat(self.A, A_r_list, 
-                                                        comm=self.comm)
+                    # generate reduced b_list and use it to generate a new b vector
+                    b_r_list = []
+                    
+                    for i in range(self.num_splines):
+                        b_subvec = self.b_list[i]
+                        V_submat = POD_obj.V_blocks_petsc[i][i]
 
-                # generate reduced b_list and use it to generate a new b vector
-                b_r_list = []
-                
-                for i in range(self.num_splines):
-                    b_subvec = self.b_list[i]
-                    V_submat = POD_obj.V_blocks_petsc[i][i]
+                        b_r = V_submat.createVecRight()
+                        V_submat.multTranspose(b_subvec, b_r)
+                        b_r_list += [b_r]
 
-                    b_r = V_submat.createVecRight()
-                    V_submat.multTranspose(b_subvec, b_r)
-                    b_r_list += [b_r]
+                    self.b = create_nest_PETScVec(b_r_list, comm=self.comm)
 
+                else:
+                    # create full V_mat
+                    V_mat = create_nest_PETScMat([POD_obj.V_blocks_petsc])
+                    V_mat = create_aijmat_from_nestmat(V_mat, [POD_obj.V_blocks_petsc])
+                    self.A = V_mat.transposeMatMult(self.A).matMult(V_mat)
 
-                self.b = create_nest_PETScVec(b_r_list, comm=self.comm)
+                    b_r = V_mat.createVecRight()
+                    V_mat.multTranspose(self.b, b_r)
+                    self.b = create_nest_PETScVec([b_r], comm=self.comm)
+
+                    du_IGA_r_list = [zero_petsc_vec(POD_obj.r)]
+                    
+                    du = create_nest_PETScVec(du_IGA_r_list, comm=self.comm)
+
             else:
                 du_list = []
                 du_IGA_list = []
@@ -543,21 +558,41 @@ class NonMatchingCouplingMod(NonMatchingCoupling):
 
             # if a POD-ROM is used, convert du back to its full size for the rest of the computations
             if POD_obj is not None:
-                du_list = []
-                du_IGA_list = []
-                
-                for i, subvec in enumerate(du_IGA_r_list):
-                    du_list += [Function(self.splines[i].V),]
+                if POD_obj.basistype != "Global":
+                    du_list = []
+                    du_IGA_list = []
+                    
+                    for i, subvec in enumerate(du_IGA_r_list):
+                        du_list += [Function(self.splines[i].V),]
 
-                    V_submat = POD_obj.V_blocks_petsc[i][i]
+                        V_submat = POD_obj.V_blocks_petsc[i][i]
 
-                    iga_petsc_vec = zero_petsc_vec(self.splines[i].M.size(1), 
-                                                comm=self.splines[i].comm)
+                        iga_petsc_vec = zero_petsc_vec(self.splines[i].M.size(1), 
+                                                    comm=self.splines[i].comm)
 
-                    V_submat.mult(subvec, iga_petsc_vec)
-                    du_IGA_list += [iga_petsc_vec]
+                        V_submat.mult(subvec, iga_petsc_vec)
+                        du_IGA_list += [iga_petsc_vec]
 
-                du = create_nest_PETScVec(du_IGA_list, comm=self.comm)
+                    du = create_nest_PETScVec(du_IGA_list, comm=self.comm)
+                else:
+                    du_list = []
+                    du_IGA_list = []
+
+                    du_iga_array = POD_obj.V_mat_full@du.array
+                    own_range = [0] + list(np.cumsum(POD_obj.dofs_per_patch))
+                    for i in range(len(self.splines)):
+                        du_list += [Function(self.splines[i].V),]
+
+                        # iga_petsc_vec = zero_petsc_vec(self.splines[i].M.size(1), 
+                        #                             comm=self.splines[i].comm)                        
+                        du_fom_i = du_iga_array[own_range[i]:own_range[i+1]]
+
+                        petsc_vec_test = PETSc.Vec().createWithArray(du_fom_i)
+                        # petsc_vec_test.setType('mpi')
+                        du_IGA_list += [petsc_vec_test]
+
+                    du = create_nest_PETScVec(du_IGA_list, comm=self.comm)
+
 
                 # if POD_obj.subtract_mean:
                     # du -= POD_obj.avg_iga_vec_petsc

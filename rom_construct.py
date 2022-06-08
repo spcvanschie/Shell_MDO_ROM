@@ -27,6 +27,7 @@ class POD_ROM():
         self.subtract_mean = subtract_mean
         self.avg_vec = None
         self.avg_vecs_list = None
+        self.basistype = "Global"
 
         # gather snapshot data
         self.gather_data()
@@ -130,7 +131,7 @@ class POD_ROM():
                                   if val <= 1.-self.ER_threshold)
         
         self.V_mat_full = u[:, :r+1]
-        self.r = r
+        self.r = r+1
         print("Global POD basis size: {}".format(r))
         self.sing_vals = s
 
@@ -145,21 +146,26 @@ class POD_ROM():
     def construct_pod_nest_mat(self, V_mats):
         # construct a nested block matrix representation of the POD basis V_mat that can be used in PENGoLINS
 
-        # A_list entries are either None or petsc4py.PETSc.Mat seqaij matrices
-        V_mat_blocks = [[None for i in range(self.num_surfs)] for j in range(self.num_surfs)]
-        V_blocks_petsc = [[None for i in range(self.num_surfs)] for j in range(self.num_surfs)]
+        if self.basistype != "Global":
+            V_mat_blocks = [[None for i in range(self.num_surfs)] for j in range(self.num_surfs)]
+            V_blocks_petsc = [[None for i in range(self.num_surfs)] for j in range(self.num_surfs)]
 
-        for i in range(self.num_surfs):
-            for j in range(self.num_surfs):
-                # convert V_mats[i][j] to PETSc matrix
-                mat = V_mats[i][j]
-                if mat is not None:
-                    mat_sparse = sp.sparse.csr_matrix(mat)
-                    mat_petsc = PETSc.Mat().createAIJWithArrays(size=(mat.shape[0],mat.shape[1]), csr=(mat_sparse.indptr, mat_sparse.indices,mat_sparse.data))
+            for i in range(self.num_surfs):
+                for j in range(self.num_surfs):
+                    # convert V_mats[i][j] to PETSc matrix
+                    mat = V_mats[i][j]
+                    if mat is not None:
+                        mat_sparse = sp.sparse.csr_matrix(mat)
+                        mat_petsc = PETSc.Mat().createAIJWithArrays(size=(mat.shape[0],mat.shape[1]), csr=(mat_sparse.indptr, mat_sparse.indices,mat_sparse.data))
 
-                    V_mat_blocks[i][j] = mat_sparse
-                    V_blocks_petsc[i][j] = mat_petsc
-            
+                        V_mat_blocks[i][j] = mat_sparse
+                        V_blocks_petsc[i][j] = mat_petsc                
+        else:
+            mat_sparse = sp.sparse.csr_matrix(self.V_mat_full)
+            mat_petsc = PETSc.Mat().createAIJWithArrays(size=(self.V_mat_full.shape[0],self.V_mat_full.shape[1]), csr=(mat_sparse.indptr, mat_sparse.indices,mat_sparse.data))
+            V_mat_blocks = [mat_sparse]
+            V_blocks_petsc = [mat_petsc]
+
         self.V_blocks_np = V_mat_blocks
         self.V_blocks_petsc = V_blocks_petsc
 
