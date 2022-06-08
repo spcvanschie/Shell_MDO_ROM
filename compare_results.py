@@ -100,3 +100,6 @@ if __name__ == "__main__":
     disp_list, t_list = gather_data(fom_folder_name, comp_datasets)
 
     comp_2norm_errors(disp_list, t_list, max_snap_idx=22)
+
+    # plot errors for the first 22 snapshots
+    # plot tip displacement and von Mises stress prediction errors (goal-oriented error analysis)

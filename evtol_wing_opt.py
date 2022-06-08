@@ -159,7 +159,7 @@ if __name__ == "__main__":
     prob.driver.options['disp'] = True
     prob.driver.opt_settings['rhobeg'] = 0.008
     prob.driver.opt_settings['catol'] = 1e-14
-    prob.driver.options['maxiter'] = 50
+    prob.driver.options['maxiter'] = 30
 
 
     prob.setup()

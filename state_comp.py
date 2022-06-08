@@ -25,7 +25,7 @@ class StateComp(om.ImplicitComponent):
         self.print_idx = 0
         # define snapshot data folder path, create if it does not yet exist
         self.cwd = os.getcwd()
-        self.folder_path = os.path.join(self.cwd, 'snapshot_data_fullPOD_ROM_{}_DoFs'.format(self.shell_sim.iga_dof))
+        self.folder_path = os.path.join(self.cwd, 'snapshot_data_fullPOD_meansubtract_ROM_1e-9_{}_DoFs'.format(self.shell_sim.iga_dof))
         if not os.path.isdir(self.folder_path):
             os.mkdir(self.folder_path)
 

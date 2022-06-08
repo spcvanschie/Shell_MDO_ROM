@@ -113,7 +113,7 @@ class ShellSim:
         # construct ROMs
         # if self.construct_ROM:
         # start by constructing the POD bases
-        self.pod_rom = POD_ROM(self.iga_dofs, 0.9999999999, subtract_mean=False)
+        self.pod_rom = POD_ROM(self.iga_dofs, 0.999999999, subtract_mean=True)
         self.oi_rom = OI_ROM(self.pod_rom)
         # self.oi_rom.construct_H_r_mask(self.problem.mapping_list)
         # self.oi_rom.construct_H_r_mask_decoupledshells()
